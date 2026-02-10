@@ -10,7 +10,6 @@ function App() {
     <AuthProvider>
       <Routes>
         <Route path="/signup" element={<SignUp />} />
-        <Route path="/login" element={<SignIn />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/" element={<SignUp />} /> {/* Default: show sign-up first */}
         <Route path="*" element={<SignUp />} />
