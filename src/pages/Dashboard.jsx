@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
-import { useEffect, useState, useMemo } from 'react'
-import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore'
+import { useEffect, useState } from 'react'
+import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp, where, writeBatch } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { db, auth } from '../services/firebase'
 import { useAuth } from '../context/AuthContext'
@@ -11,7 +11,6 @@ export default function Dashboard() {
   const { currentUser } = useAuth()
   const navigate = useNavigate()
   const [products, setProducts] = useState([])
-  const [productsMap, setProductsMap] = useState({})
   const [orders, setOrders] = useState([])
   const [confirmedPayments, setConfirmedPayments] = useState([])
   const [showForm, setShowForm] = useState(false)
@@ -21,7 +20,8 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('products')
   const [confirmPaymentModal, setConfirmPaymentModal] = useState(null)
-  const [statsTimeRange, setStatsTimeRange] = useState('all') // 'all', 'today', 'week', 'month', 'year'
+  const [stockEditModal, setStockEditModal] = useState(null)
+  const [stockUpdateLoading, setStockUpdateLoading] = useState(false)
 
   useEffect(() => {
     if (!currentUser) {
@@ -33,146 +33,22 @@ export default function Dashboard() {
     loadConfirmedPayments()
   }, [currentUser, navigate])
 
-  // Calculate statistics
-  const statistics = useMemo(() => {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-    const monthAgo = new Date(today.getFullYear(), today.getMonth() - 1, today.getDate())
-    const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate())
-
-    const filterByDate = (items, dateField) => {
-      if (statsTimeRange === 'all') return items
-      return items.filter(item => {
-        const itemDate = item[dateField]?.toDate ? item[dateField].toDate() : new Date(item[dateField])
-        if (statsTimeRange === 'today') return itemDate >= today
-        if (statsTimeRange === 'week') return itemDate >= weekAgo
-        if (statsTimeRange === 'month') return itemDate >= monthAgo
-        if (statsTimeRange === 'year') return itemDate >= yearAgo
-        return true
-      })
-    }
-
-    const filteredOrders = filterByDate(orders, 'createdAt')
-    const filteredConfirmed = filterByDate(confirmedPayments, 'confirmedAt')
-    const filteredProducts = filterByDate(products, 'createdAt')
-
-    // Revenue calculations
-    const totalRevenue = filteredConfirmed.reduce((sum, p) => sum + (p.totalPrice || 0), 0)
-    const totalOrders = filteredOrders.length
-    const totalConfirmedOrders = filteredConfirmed.length
-    const averageOrderValue = totalConfirmedOrders > 0 ? totalRevenue / totalConfirmedOrders : 0
-
-    // Product statistics
-    const totalProducts = products.length
-    const totalStock = products.reduce((sum, p) => sum + (p.piecesPerBox || 0), 0)
-    const averagePrice = products.length > 0 
-      ? products.reduce((sum, p) => sum + (p.price || 0), 0) / products.length 
-      : 0
-
-    // Top selling products
-    const productSales = {}
-    filteredConfirmed.forEach(payment => {
-      payment.items?.forEach(item => {
-        const id = item.id || item.name
-        if (!productSales[id]) {
-          productSales[id] = {
-            name: item.name,
-            quantity: 0,
-            revenue: 0,
-            imageUrl: item.imageUrl || productsMap[id]?.imageUrl
-          }
-        }
-        productSales[id].quantity += item.quantity || 0
-        productSales[id].revenue += (item.price || 0) * (item.quantity || 0)
-      })
-    })
-
-    const topProducts = Object.values(productSales)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 5)
-
-    // Flavor statistics
-    const flavorStats = {}
-    products.forEach(product => {
-      product.flavors?.forEach(flavor => {
-        if (!flavorStats[flavor]) {
-          flavorStats[flavor] = { count: 0, products: [] }
-        }
-        flavorStats[flavor].count++
-        flavorStats[flavor].products.push(product.name)
-      })
-    })
-
-    // Order status breakdown
-    const orderStatusBreakdown = {
-      pending: filteredOrders.filter(o => o.status === 'completed' && !o.adminConfirmed).length,
-      confirmed: filteredConfirmed.length,
-      total: filteredOrders.length
-    }
-
-    // Daily revenue for chart (last 30 days)
-    const dailyRevenue = {}
-    const last30Days = Array.from({ length: 30 }, (_, i) => {
-      const d = new Date(today)
-      d.setDate(d.getDate() - i)
-      return d.toISOString().split('T')[0]
-    }).reverse()
-
-    last30Days.forEach(date => {
-      dailyRevenue[date] = 0
-    })
-
-    filteredConfirmed.forEach(payment => {
-      const date = payment.confirmedAt?.toDate 
-        ? payment.confirmedAt.toDate().toISOString().split('T')[0]
-        : new Date(payment.confirmedAt).toISOString().split('T')[0]
-      if (dailyRevenue[date] !== undefined) {
-        dailyRevenue[date] += payment.totalPrice || 0
-      }
-    })
-
-    return {
-      totalRevenue,
-      totalOrders,
-      totalConfirmedOrders,
-      averageOrderValue,
-      totalProducts,
-      totalStock,
-      averagePrice,
-      topProducts,
-      flavorStats,
-      orderStatusBreakdown,
-      dailyRevenue,
-      conversionRate: totalOrders > 0 ? (totalConfirmedOrders / totalOrders) * 100 : 0
-    }
-  }, [orders, confirmedPayments, products, productsMap, statsTimeRange])
-
   const loadProducts = async () => {
     try {
       setIsLoading(true)
       const snapshot = await getDocs(collection(db, 'products'))
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      const list = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data(),
+        // Ensure stock field exists
+        stock: doc.data().stock || 0
+      }))
       setProducts(list)
-      
-      const map = {}
-      list.forEach(product => {
-        map[product.id] = product
-      })
-      setProductsMap(map)
     } catch (err) {
       console.error('Error loading products:', err)
     } finally {
       setIsLoading(false)
     }
-  }
-
-  const getProductImage = (item) => {
-    if (item.imageUrl) return item.imageUrl
-    if (item.id && productsMap[item.id]?.imageUrl) {
-      return productsMap[item.id].imageUrl
-    }
-    return null
   }
 
   const loadOrders = async () => {
@@ -201,19 +77,91 @@ export default function Dashboard() {
     }
   }
 
+  // Handle stock update from modal
+  const handleStockUpdate = async (productId, newStock) => {
+    try {
+      setStockUpdateLoading(true)
+      const stockNum = parseInt(newStock) || 0
+      
+      await updateDoc(doc(db, 'products', productId), {
+        stock: stockNum,
+        updatedAt: serverTimestamp()
+      })
+
+      // Update local state
+      setProducts(prev => prev.map(p => 
+        p.id === productId ? { ...p, stock: stockNum } : p
+      ))
+      
+      setStockEditModal(null)
+    } catch (err) {
+      console.error('Error updating stock:', err)
+      alert('Failed to update stock. Please try again.')
+    } finally {
+      setStockUpdateLoading(false)
+    }
+  }
+
+  // Check if order can be fulfilled with current stock
+  const checkStockAvailability = (order) => {
+    const issues = []
+    order.items?.forEach(item => {
+      const product = products.find(p => p.id === item.id || p.name === item.name)
+      if (product) {
+        const availableStock = product.stock || 0
+        if (availableStock < item.quantity) {
+          issues.push({
+            product: product.name,
+            requested: item.quantity,
+            available: availableStock,
+            shortage: item.quantity - availableStock
+          })
+        }
+      }
+    })
+    return issues
+  }
+
   const handleConfirmPayment = async (order) => {
     try {
-      const enrichedItems = order.items?.map(item => ({
-        ...item,
-        imageUrl: getProductImage(item) || null
-      })) || []
+      // Check stock availability first
+      const stockIssues = checkStockAvailability(order)
+      
+      if (stockIssues.length > 0) {
+        const issueText = stockIssues.map(i => 
+          `• ${i.product}: Need ${i.requested}, have ${i.available} (shortage: ${i.shortage})`
+        ).join('\n')
+        
+        const confirmAnyway = window.confirm(
+          `⚠️ STOCK WARNING!\n\nThe following items have insufficient stock:\n${issueText}\n\nDo you want to confirm anyway? (Stock will go negative)`
+        )
+        
+        if (!confirmAnyway) return
+      }
 
-      await addDoc(collection(db, 'confirmedPayments'), {
+      // Use batch write for atomic operations
+      const batch = writeBatch(db)
+
+      // Deduct stock for each item
+      order.items?.forEach(item => {
+        const product = products.find(p => p.id === item.id || p.name === item.name)
+        if (product) {
+          const newStock = (product.stock || 0) - item.quantity
+          batch.update(doc(db, 'products', product.id), {
+            stock: newStock,
+            updatedAt: serverTimestamp()
+          })
+        }
+      })
+
+      // Add to confirmedPayments
+      const confirmedRef = doc(collection(db, 'confirmedPayments'))
+      batch.set(confirmedRef, {
         originalOrderId: order.id,
         orderId: order.orderId,
         paymentId: order.paymentId,
         customerInfo: { orderReference: order.orderId },
-        items: enrichedItems,
+        items: order.items || [],
         totalItems: order.totalItems || 0,
         totalPrice: order.totalPrice || 0,
         currency: order.currency || 'PI',
@@ -223,19 +171,35 @@ export default function Dashboard() {
         confirmedAt: serverTimestamp(),
         adminConfirmed: true,
         status: 'confirmed_for_shipping',
-        shippingStatus: 'pending'
+        shippingStatus: 'pending',
+        stockDeducted: true // Track that stock was updated
       })
 
-      await updateDoc(doc(db, 'orders', order.id), {
+      // Update order status
+      batch.update(doc(db, 'orders', order.id), {
         adminConfirmed: true,
         adminConfirmedAt: serverTimestamp(),
         adminConfirmedBy: currentUser.uid,
         shippingStatus: 'pending'
       })
 
+      // Commit all operations
+      await batch.commit()
+
+      // Update local state
+      setProducts(prev => prev.map(p => {
+        const orderItem = order.items?.find(item => item.id === p.id || item.name === p.name)
+        if (orderItem) {
+          return { ...p, stock: (p.stock || 0) - orderItem.quantity }
+        }
+        return p
+      }))
+
       setConfirmPaymentModal(null)
       loadOrders()
       loadConfirmedPayments()
+      
+      alert('✅ Order confirmed and stock updated successfully!')
     } catch (err) {
       console.error('Error confirming payment:', err)
       alert('Error confirming payment. Please try again.')
@@ -288,6 +252,10 @@ export default function Dashboard() {
     o.items?.some(item => item.name?.toLowerCase().includes(searchQuery.toLowerCase()))
   )
 
+  // Calculate low stock products (less than 10)
+  const lowStockProducts = products.filter(p => (p.stock || 0) < 10 && (p.stock || 0) > 0)
+  const outOfStockProducts = products.filter(p => (p.stock || 0) <= 0)
+
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A'
     try {
@@ -304,31 +272,8 @@ export default function Dashboard() {
     }
   }
 
-  const formatCurrency = (amount) => {
-    return `π ${Number(amount).toFixed(2)}`
-  }
-
-  // Simple bar chart component
-  const BarChart = ({ data, maxValue }) => {
-    const entries = Object.entries(data)
-    if (entries.length === 0) return <div className="empty-chart">No data available</div>
-    
-    return (
-      <div className="bar-chart">
-        {entries.map(([date, value], index) => {
-          const height = maxValue > 0 ? (value / maxValue) * 100 : 0
-          const displayDate = new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-          return (
-            <div key={date} className="bar-wrapper" title={`${displayDate}: ${formatCurrency(value)}`}>
-              <div className="bar" style={{ height: `${Math.max(height, 4)}%` }}>
-                {height > 20 && <span className="bar-value">{value > 0 ? 'π' + Math.round(value) : ''}</span>}
-              </div>
-              <span className="bar-label">{index % 5 === 0 ? displayDate : ''}</span>
-            </div>
-          )
-        })}
-      </div>
-    )
+  const formatCurrency = (amount, currency = 'PI') => {
+    return `${currency} ${Number(amount).toFixed(2)}`
   }
 
   return (
@@ -466,393 +411,40 @@ export default function Dashboard() {
           text-align: center;
         }
 
-        /* Statistics Styles */
-        .stats-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 32px;
-          flex-wrap: wrap;
-          gap: 16px;
-        }
-
-        .stats-title {
-          font-size: 1.8rem;
-          font-weight: 800;
-          color: #0f172a;
-        }
-
-        .time-range-selector {
-          display: flex;
-          gap: 8px;
-          background: #ffffff;
-          padding: 4px;
-          border-radius: 10px;
-          border: 1px solid #e2e8f0;
-        }
-
-        .time-range-btn {
-          padding: 8px 16px;
-          border: none;
-          background: transparent;
-          color: #64748b;
-          font-weight: 600;
-          font-size: 0.9rem;
-          cursor: pointer;
-          border-radius: 6px;
-          transition: all 0.3s ease;
-        }
-
-        .time-range-btn:hover {
-          color: #0f172a;
-          background: #f1f5f9;
-        }
-
-        .time-range-btn.active {
-          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-          color: #ffffff;
-        }
-
-        .stats-grid {
+        /* Stock Alerts */
+        .stock-alerts {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-          gap: 20px;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 16px;
           margin-bottom: 32px;
         }
 
-        .stat-card {
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
+        .stock-alert {
+          padding: 16px 20px;
           border-radius: 12px;
-          padding: 24px;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-          transition: all 0.3s ease;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .stat-card:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 8px 16px rgba(15, 23, 42, 0.1);
-        }
-
-        .stat-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: 4px;
-          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        }
-
-        .stat-card.revenue::before { background: linear-gradient(135deg, #059669 0%, #047857 100%); }
-        .stat-card.orders::before { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
-        .stat-card.products::before { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
-        .stat-card.conversion::before { background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); }
-
-        .stat-icon {
-          width: 48px;
-          height: 48px;
-          border-radius: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 1.5rem;
-          margin-bottom: 16px;
-          background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-        }
-
-        .stat-card.revenue .stat-icon { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); }
-        .stat-card.orders .stat-icon { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); }
-        .stat-card.products .stat-icon { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); }
-        .stat-card.conversion .stat-icon { background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); }
-
-        .stat-label {
-          font-size: 0.9rem;
-          color: #64748b;
-          font-weight: 600;
-          margin-bottom: 8px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-
-        .stat-value {
-          font-size: 2rem;
-          font-weight: 800;
-          color: #0f172a;
-          margin-bottom: 8px;
-        }
-
-        .stat-change {
-          font-size: 0.85rem;
-          font-weight: 600;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-        }
-
-        .stat-change.positive { color: #059669; }
-        .stat-change.negative { color: #dc2626; }
-
-        .stats-sections {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-          gap: 24px;
-        }
-
-        .stats-section {
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          padding: 24px;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-        }
-
-        .section-header-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 20px;
-          padding-bottom: 16px;
-          border-bottom: 2px solid #f1f5f9;
-        }
-
-        .section-header-title {
-          font-size: 1.2rem;
-          font-weight: 700;
-          color: #0f172a;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        /* Chart Styles */
-        .chart-container {
-          height: 250px;
-          position: relative;
-        }
-
-        .bar-chart {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          height: 200px;
-          gap: 4px;
-          padding-bottom: 30px;
-          border-bottom: 2px solid #e2e8f0;
-        }
-
-        .bar-wrapper {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          height: 100%;
-          position: relative;
-        }
-
-        .bar {
-          width: 100%;
-          background: linear-gradient(180deg, #059669 0%, #047857 100%);
-          border-radius: 4px 4px 0 0;
-          min-height: 4px;
-          transition: all 0.3s ease;
-          position: relative;
-          display: flex;
-          align-items: flex-end;
-          justify-content: center;
-          padding-bottom: 4px;
-        }
-
-        .bar:hover {
-          opacity: 0.8;
-          transform: scaleX(1.1);
-        }
-
-        .bar-value {
-          color: #ffffff;
-          font-size: 0.7rem;
-          font-weight: 700;
-          writing-mode: vertical-rl;
-          text-orientation: mixed;
-        }
-
-        .bar-label {
-          position: absolute;
-          bottom: -25px;
-          font-size: 0.7rem;
-          color: #64748b;
-          transform: rotate(-45deg);
-          white-space: nowrap;
-        }
-
-        .empty-chart {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          height: 200px;
-          color: #94a3b8;
-          font-size: 1rem;
-        }
-
-        /* Top Products List */
-        .top-products-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .top-product-item {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          padding: 12px;
-          background: #f8fafc;
-          border-radius: 10px;
-          border: 1px solid #e2e8f0;
-          transition: all 0.2s ease;
-        }
-
-        .top-product-item:hover {
-          background: #f1f5f9;
-          border-color: #cbd5e1;
-          transform: translateX(4px);
-        }
-
-        .top-product-rank {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-          color: #ffffff;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 700;
-          font-size: 0.9rem;
-        }
-
-        .top-product-rank.top3 {
-          background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        }
-
-        .top-product-image {
-          width: 50px;
-          height: 50px;
-          border-radius: 8px;
-          object-fit: cover;
-          background: #e2e8f0;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .top-product-placeholder {
-          width: 50px;
-          height: 50px;
-          border-radius: 8px;
-          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 1.5rem;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .top-product-info {
-          flex: 1;
-        }
-
-        .top-product-name {
-          font-weight: 700;
-          color: #0f172a;
-          margin-bottom: 4px;
-        }
-
-        .top-product-qty {
-          font-size: 0.85rem;
-          color: #64748b;
-        }
-
-        .top-product-revenue {
-          font-weight: 800;
-          color: #059669;
-          font-size: 1.1rem;
-        }
-
-        /* Flavor Tags */
-        .flavors-grid {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .flavor-tag {
-          padding: 8px 16px;
-          background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-          border: 1px solid #e2e8f0;
-          border-radius: 20px;
-          font-size: 0.9rem;
-          color: #475569;
-          font-weight: 600;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-
-        .flavor-tag .count {
-          background: #0f172a;
-          color: #ffffff;
-          padding: 2px 8px;
-          border-radius: 12px;
-          font-size: 0.75rem;
-        }
-
-        /* Status Breakdown */
-        .status-breakdown {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-
-        .status-item {
           display: flex;
           align-items: center;
           gap: 12px;
-        }
-
-        .status-bar-bg {
-          flex: 1;
-          height: 12px;
-          background: #f1f5f9;
-          border-radius: 6px;
-          overflow: hidden;
-        }
-
-        .status-bar-fill {
-          height: 100%;
-          border-radius: 6px;
-          transition: width 0.5s ease;
-        }
-
-        .status-bar-fill.pending { background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%); }
-        .status-bar-fill.confirmed { background: linear-gradient(90deg, #059669 0%, #047857 100%); }
-
-        .status-info {
-          min-width: 80px;
-          text-align: right;
-        }
-
-        .status-count {
           font-weight: 700;
-          color: #0f172a;
-          font-size: 1.1rem;
+          font-size: 0.95rem;
         }
 
-        .status-label {
-          font-size: 0.8rem;
-          color: #64748b;
+        .stock-alert.warning {
+          background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+          color: #92400e;
+          border: 1px solid #f59e0b;
+        }
+
+        .stock-alert.danger {
+          background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+          color: #991b1b;
+          border: 1px solid #ef4444;
+        }
+
+        .stock-alert.success {
+          background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+          color: #065f46;
+          border: 1px solid #10b981;
         }
 
         /* Top Actions Bar */
@@ -929,6 +521,38 @@ export default function Dashboard() {
           animation: slideDown 0.4s ease-out;
         }
 
+        .form-section-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 28px;
+          padding-bottom: 20px;
+          border-bottom: 2px solid #f1f5f9;
+        }
+
+        .form-section-title {
+          font-size: 1.3rem;
+          font-weight: 800;
+          color: #0f172a;
+        }
+
+        .close-btn {
+          padding: 8px 12px;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
+          border-radius: 6px;
+          color: #64748b;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-size: 0.85rem;
+        }
+
+        .close-btn:hover {
+          background: #e2e8f0;
+          color: #0f172a;
+        }
+
         @keyframes slideDown {
           from {
             opacity: 0;
@@ -972,7 +596,7 @@ export default function Dashboard() {
         /* Products Grid */
         .products-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
           gap: 28px;
         }
 
@@ -1074,6 +698,54 @@ export default function Dashboard() {
           color: #64748b;
         }
 
+        /* Stock Badge */
+        .stock-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 12px;
+          border-radius: 20px;
+          font-size: 0.85rem;
+          font-weight: 700;
+          width: fit-content;
+        }
+
+        .stock-badge.in-stock {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
+        .stock-badge.low-stock {
+          background: #fef3c7;
+          color: #92400e;
+        }
+
+        .stock-badge.out-of-stock {
+          background: #fee2e2;
+          color: #991b1b;
+        }
+
+        .stock-btn {
+          padding: 8px 16px;
+          background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+          color: #ffffff;
+          border: none;
+          border-radius: 6px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 8px;
+        }
+
+        .stock-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
         .product-actions {
           display: flex;
           gap: 12px;
@@ -1172,53 +844,46 @@ export default function Dashboard() {
         }
 
         .order-items {
-          max-width: 300px;
+          max-width: 250px;
         }
 
         .order-item {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 8px;
           font-size: 0.9rem;
           color: #475569;
-          margin-bottom: 8px;
-          padding: 6px;
-          background: #f8fafc;
-          border-radius: 8px;
-          border: 1px solid #e2e8f0;
+          margin-bottom: 6px;
+          padding: 4px 0;
         }
 
         .item-image {
-          width: 40px;
-          height: 40px;
+          width: 32px;
+          height: 32px;
           border-radius: 6px;
           object-fit: cover;
           background: #f1f5f9;
-          border: 1px solid #e2e8f0;
         }
 
         .item-placeholder {
-          width: 40px;
-          height: 40px;
+          width: 32px;
+          height: 32px;
           border-radius: 6px;
           background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 1.2rem;
-          border: 1px solid #e2e8f0;
+          font-size: 1rem;
         }
 
         .item-details {
           display: flex;
           flex-direction: column;
-          flex: 1;
         }
 
         .item-name {
           font-weight: 600;
           color: #0f172a;
-          font-size: 0.9rem;
         }
 
         .item-meta {
@@ -1286,10 +951,16 @@ export default function Dashboard() {
           box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
 
+        .confirm-btn:disabled {
+          background: #9ca3af;
+          cursor: not-allowed;
+          transform: none;
+        }
+
         /* Confirmed Payments Cards */
         .confirmed-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
           gap: 24px;
         }
 
@@ -1357,75 +1028,55 @@ export default function Dashboard() {
           color: #94a3b8;
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          margin-bottom: 12px;
+          margin-bottom: 8px;
           font-weight: 700;
         }
 
         .confirmed-items-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
+          background: #f8fafc;
+          border-radius: 8px;
+          padding: 12px;
         }
 
         .confirmed-item {
           display: flex;
+          justify-content: space-between;
           align-items: center;
-          gap: 16px;
-          padding: 12px;
-          background: #f8fafc;
-          border-radius: 10px;
-          border: 1px solid #e2e8f0;
-          transition: all 0.2s ease;
+          padding: 8px 0;
+          border-bottom: 1px solid #e2e8f0;
         }
 
-        .confirmed-item:hover {
-          background: #f1f5f9;
-          border-color: #cbd5e1;
-        }
-
-        .confirmed-item-image {
-          width: 60px;
-          height: 60px;
-          border-radius: 8px;
-          object-fit: cover;
-          background: #e2e8f0;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .confirmed-item-placeholder {
-          width: 60px;
-          height: 60px;
-          border-radius: 8px;
-          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 1.5rem;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        .confirmed-item:last-child {
+          border-bottom: none;
         }
 
         .confirmed-item-info {
-          flex: 1;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .confirmed-item-img {
+          width: 40px;
+          height: 40px;
+          border-radius: 8px;
+          object-fit: cover;
+          background: #e2e8f0;
         }
 
         .confirmed-item-name {
-          font-weight: 700;
+          font-weight: 600;
           color: #0f172a;
-          font-size: 1rem;
-          margin-bottom: 4px;
         }
 
         .confirmed-item-qty {
-          font-size: 0.9rem;
+          font-size: 0.85rem;
           color: #64748b;
         }
 
         .confirmed-item-price {
-          font-weight: 800;
-          color: #059669;
-          font-size: 1.1rem;
+          font-weight: 700;
+          color: #0f172a;
         }
 
         .confirmed-total {
@@ -1434,19 +1085,17 @@ export default function Dashboard() {
           align-items: center;
           padding: 16px;
           background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-          border-radius: 10px;
+          border-radius: 8px;
           margin-top: 16px;
-          border: 2px solid #059669;
         }
 
         .confirmed-total-label {
           font-weight: 700;
           color: #065f46;
-          font-size: 1rem;
         }
 
         .confirmed-total-amount {
-          font-size: 1.5rem;
+          font-size: 1.4rem;
           font-weight: 800;
           color: #059669;
         }
@@ -1457,7 +1106,7 @@ export default function Dashboard() {
           border-top: 1px solid #f1f5f9;
           display: flex;
           flex-direction: column;
-          gap: 6px;
+          gap: 4px;
           font-size: 0.85rem;
           color: #64748b;
         }
@@ -1472,9 +1121,9 @@ export default function Dashboard() {
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          padding: 6px 12px;
+          padding: 4px 10px;
           border-radius: 20px;
-          font-size: 0.8rem;
+          font-size: 0.75rem;
           font-weight: 700;
           background: #fef3c7;
           color: #92400e;
@@ -1503,7 +1152,7 @@ export default function Dashboard() {
           background: #ffffff;
           border-radius: 16px;
           padding: 32px;
-          max-width: 700px;
+          max-width: 600px;
           width: 100%;
           box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
           animation: slideUp 0.3s ease-out;
@@ -1551,7 +1200,7 @@ export default function Dashboard() {
           text-transform: uppercase;
           letter-spacing: 0.5px;
           font-weight: 700;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
         }
 
         .modal-items {
@@ -1562,63 +1211,43 @@ export default function Dashboard() {
 
         .modal-item {
           display: flex;
+          justify-content: space-between;
           align-items: center;
-          gap: 16px;
-          padding: 16px;
+          padding: 12px;
           background: #ffffff;
-          border-radius: 10px;
+          border-radius: 8px;
           border: 1px solid #e2e8f0;
-          transition: all 0.2s ease;
         }
 
-        .modal-item:hover {
-          border-color: #cbd5e1;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-        }
-
-        .modal-item-image {
-          width: 64px;
-          height: 64px;
-          border-radius: 10px;
-          object-fit: cover;
-          background: #f1f5f9;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .modal-item-placeholder {
-          width: 64px;
-          height: 64px;
-          border-radius: 10px;
-          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+        .modal-item-info {
           display: flex;
           align-items: center;
-          justify-content: center;
-          font-size: 1.8rem;
-          border: 2px solid #ffffff;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          gap: 12px;
         }
 
-        .modal-item-details {
-          flex: 1;
+        .modal-item-img {
+          width: 48px;
+          height: 48px;
+          border-radius: 8px;
+          object-fit: cover;
+          background: #f1f5f9;
         }
 
         .modal-item-details h4 {
           font-weight: 700;
           color: #0f172a;
-          margin-bottom: 6px;
-          font-size: 1.1rem;
+          margin-bottom: 4px;
         }
 
         .modal-item-details p {
-          font-size: 0.9rem;
+          font-size: 0.85rem;
           color: #64748b;
         }
 
         .modal-item-price {
           font-weight: 800;
           color: #0f172a;
-          font-size: 1.2rem;
+          font-size: 1.1rem;
         }
 
         .modal-summary {
@@ -1629,17 +1258,16 @@ export default function Dashboard() {
         .modal-summary-row {
           display: flex;
           justify-content: space-between;
-          margin-bottom: 12px;
-          font-size: 1rem;
-          color: #374151;
+          margin-bottom: 8px;
+          font-size: 0.95rem;
         }
 
         .modal-summary-row:last-child {
           margin-bottom: 0;
           padding-top: 12px;
-          border-top: 2px solid #059669;
+          border-top: 1px solid #059669;
           font-weight: 800;
-          font-size: 1.3rem;
+          font-size: 1.2rem;
           color: #059669;
         }
 
@@ -1681,6 +1309,70 @@ export default function Dashboard() {
         .modal-btn.confirm-payment:hover {
           transform: translateY(-2px);
           box-shadow: 0 6px 16px rgba(5, 150, 105, 0.4);
+        }
+
+        /* Stock Edit Modal Specific */
+        .stock-input-group {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          margin-top: 16px;
+        }
+
+        .stock-input {
+          flex: 1;
+          padding: 12px 16px;
+          border: 2px solid #e2e8f0;
+          border-radius: 8px;
+          font-size: 1.1rem;
+          font-weight: 700;
+          text-align: center;
+        }
+
+        .stock-input:focus {
+          outline: none;
+          border-color: #3b82f6;
+          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .stock-adjust-btn {
+          width: 48px;
+          height: 48px;
+          border-radius: 8px;
+          border: 2px solid #e2e8f0;
+          background: #ffffff;
+          font-size: 1.5rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .stock-adjust-btn:hover {
+          background: #f1f5f9;
+          border-color: #3b82f6;
+        }
+
+        .stock-current {
+          text-align: center;
+          padding: 16px;
+          background: #f8fafc;
+          border-radius: 8px;
+          margin-bottom: 16px;
+        }
+
+        .stock-current-label {
+          font-size: 0.9rem;
+          color: #64748b;
+          margin-bottom: 4px;
+        }
+
+        .stock-current-value {
+          font-size: 2rem;
+          font-weight: 800;
+          color: #0f172a;
         }
 
         /* Empty State */
@@ -1734,7 +1426,7 @@ export default function Dashboard() {
         /* Responsive Design */
         @media (max-width: 1024px) {
           .products-grid {
-            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 20px;
           }
 
@@ -1742,11 +1434,7 @@ export default function Dashboard() {
             grid-template-columns: 1fr;
           }
 
-          .stats-grid {
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          }
-
-          .stats-sections {
+          .stock-alerts {
             grid-template-columns: 1fr;
           }
 
@@ -1805,16 +1493,6 @@ export default function Dashboard() {
           .nav-tab {
             padding: 10px 16px;
             font-size: 0.9rem;
-          }
-
-          .stats-header {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .time-range-selector {
-            width: 100%;
-            overflow-x: auto;
           }
 
           .main {
@@ -1881,32 +1559,6 @@ export default function Dashboard() {
           .modal-actions {
             flex-direction: column;
           }
-
-          .order-item {
-            padding: 8px;
-          }
-
-          .item-image, .item-placeholder {
-            width: 32px;
-            height: 32px;
-          }
-
-          .confirmed-item {
-            padding: 10px;
-          }
-
-          .confirmed-item-image, .confirmed-item-placeholder {
-            width: 50px;
-            height: 50px;
-          }
-
-          .bar-chart {
-            gap: 2px;
-          }
-
-          .bar-label {
-            font-size: 0.6rem;
-          }
         }
 
         @media (max-width: 480px) {
@@ -1940,10 +1592,6 @@ export default function Dashboard() {
           .product-price {
             font-size: 1.3rem;
           }
-
-          .stat-value {
-            font-size: 1.5rem;
-          }
         }
       `}</style>
 
@@ -1963,12 +1611,6 @@ export default function Dashboard() {
       <main className="main">
         {/* Navigation Tabs */}
         <div className="nav-tabs">
-          <button
-            className={`nav-tab ${activeTab === 'statistics' ? 'active' : ''}`}
-            onClick={() => setActiveTab('statistics')}
-          >
-            📊 Statistics
-          </button>
           <button
             className={`nav-tab ${activeTab === 'products' ? 'active' : ''}`}
             onClick={() => setActiveTab('products')}
@@ -1992,182 +1634,20 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* Statistics Section */}
-        {activeTab === 'statistics' && (
-          <>
-            <div className="stats-header">
-              <h2 className="stats-title">📊 Business Overview</h2>
-              <div className="time-range-selector">
-                {[
-                  { key: 'all', label: 'All Time' },
-                  { key: 'today', label: 'Today' },
-                  { key: 'week', label: 'This Week' },
-                  { key: 'month', label: 'This Month' },
-                  { key: 'year', label: 'This Year' }
-                ].map(range => (
-                  <button
-                    key={range.key}
-                    className={`time-range-btn ${statsTimeRange === range.key ? 'active' : ''}`}
-                    onClick={() => setStatsTimeRange(range.key)}
-                  >
-                    {range.label}
-                  </button>
-                ))}
+        {/* Stock Alerts */}
+        {activeTab === 'products' && (lowStockProducts.length > 0 || outOfStockProducts.length > 0) && (
+          <div className="stock-alerts">
+            {outOfStockProducts.length > 0 && (
+              <div className="stock-alert danger">
+                ⚠️ {outOfStockProducts.length} products out of stock
               </div>
-            </div>
-
-            {/* Key Metrics Cards */}
-            <div className="stats-grid">
-              <div className="stat-card revenue">
-                <div className="stat-icon">💰</div>
-                <div className="stat-label">Total Revenue</div>
-                <div className="stat-value">{formatCurrency(statistics.totalRevenue)}</div>
-                <div className="stat-change positive">
-                  {statistics.totalConfirmedOrders} confirmed orders
-                </div>
+            )}
+            {lowStockProducts.length > 0 && (
+              <div className="stock-alert warning">
+                ⚡ {lowStockProducts.length} products low on stock (&lt; 10)
               </div>
-
-              <div className="stat-card orders">
-                <div className="stat-icon">🛒</div>
-                <div className="stat-label">Total Orders</div>
-                <div className="stat-value">{statistics.totalOrders}</div>
-                <div className="stat-change">
-                  {statistics.totalConfirmedOrders} confirmed
-                </div>
-              </div>
-
-              <div className="stat-card conversion">
-                <div className="stat-icon">📈</div>
-                <div className="stat-label">Conversion Rate</div>
-                <div className="stat-value">{statistics.conversionRate.toFixed(1)}%</div>
-                <div className="stat-change positive">
-                  {statistics.averageOrderValue > 0 && `Avg: ${formatCurrency(statistics.averageOrderValue)}`}
-                </div>
-              </div>
-
-              <div className="stat-card products">
-                <div className="stat-icon">📦</div>
-                <div className="stat-label">Products</div>
-                <div className="stat-value">{statistics.totalProducts}</div>
-                <div className="stat-change">
-                  {statistics.totalStock} items in stock
-                </div>
-              </div>
-            </div>
-
-            {/* Detailed Statistics Sections */}
-            <div className="stats-sections">
-              {/* Revenue Chart */}
-              <div className="stats-section">
-                <div className="section-header-row">
-                  <h3 className="section-header-title">📈 Revenue Trend (Last 30 Days)</h3>
-                </div>
-                <div className="chart-container">
-                  <BarChart 
-                    data={statistics.dailyRevenue} 
-                    maxValue={Math.max(...Object.values(statistics.dailyRevenue), 1)} 
-                  />
-                </div>
-              </div>
-
-              {/* Top Selling Products */}
-              <div className="stats-section">
-                <div className="section-header-row">
-                  <h3 className="section-header-title">🏆 Top Selling Products</h3>
-                </div>
-                {statistics.topProducts.length > 0 ? (
-                  <div className="top-products-list">
-                    {statistics.topProducts.map((product, index) => (
-                      <div key={index} className="top-product-item">
-                        <div className={`top-product-rank ${index < 3 ? 'top3' : ''}`}>
-                          {index + 1}
-                        </div>
-                        {product.imageUrl ? (
-                          <img 
-                            src={product.imageUrl} 
-                            alt={product.name} 
-                            className="top-product-image"
-                            onError={(e) => {
-                              e.target.style.display = 'none'
-                              e.target.nextSibling.style.display = 'flex'
-                            }}
-                          />
-                        ) : (
-                          <div className="top-product-placeholder">📦</div>
-                        )}
-                        <div className="top-product-info">
-                          <div className="top-product-name">{product.name}</div>
-                          <div className="top-product-qty">{product.quantity} units sold</div>
-                        </div>
-                        <div className="top-product-revenue">
-                          {formatCurrency(product.revenue)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state" style={{ padding: '40px 20px' }}>
-                    <div className="empty-icon" style={{ fontSize: '2rem' }}>📊</div>
-                    <p className="empty-text">No sales data available yet</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Order Status Breakdown */}
-              <div className="stats-section">
-                <div className="section-header-row">
-                  <h3 className="section-header-title">📋 Order Status Breakdown</h3>
-                </div>
-                <div className="status-breakdown">
-                  <div className="status-item">
-                    <div className="status-bar-bg">
-                      <div 
-                        className="status-bar-fill confirmed" 
-                        style={{ width: `${statistics.orderStatusBreakdown.total > 0 ? (statistics.orderStatusBreakdown.confirmed / statistics.orderStatusBreakdown.total) * 100 : 0}%` }}
-                      />
-                    </div>
-                    <div className="status-info">
-                      <div className="status-count">{statistics.orderStatusBreakdown.confirmed}</div>
-                      <div className="status-label">Confirmed</div>
-                    </div>
-                  </div>
-                  <div className="status-item">
-                    <div className="status-bar-bg">
-                      <div 
-                        className="status-bar-fill pending" 
-                        style={{ width: `${statistics.orderStatusBreakdown.total > 0 ? (statistics.orderStatusBreakdown.pending / statistics.orderStatusBreakdown.total) * 100 : 0}%` }}
-                      />
-                    </div>
-                    <div className="status-info">
-                      <div className="status-count">{statistics.orderStatusBreakdown.pending}</div>
-                      <div className="status-label">Pending</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Product Flavors Distribution */}
-              <div className="stats-section">
-                <div className="section-header-row">
-                  <h3 className="section-header-title">🎨 Product Flavors</h3>
-                </div>
-                <div className="flavors-grid">
-                  {Object.entries(statistics.flavorStats).map(([flavor, data]) => (
-                    <div key={flavor} className="flavor-tag">
-                      {flavor}
-                      <span className="count">{data.count}</span>
-                    </div>
-                  ))}
-                </div>
-                {Object.keys(statistics.flavorStats).length === 0 && (
-                  <div className="empty-state" style={{ padding: '40px 20px' }}>
-                    <div className="empty-icon" style={{ fontSize: '2rem' }}>🎨</div>
-                    <p className="empty-text">No flavor data available</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
+            )}
+          </div>
         )}
 
         {/* Top Actions */}
@@ -2253,44 +1733,60 @@ export default function Dashboard() {
               <>
                 {filteredProducts.length > 0 ? (
                   <div className="products-grid">
-                    {filteredProducts.map(p => (
-                      <div key={p.id} className="product-card">
-                        <div className="product-image-container">
-                          {p.imageUrl ? (
-                            <img src={p.imageUrl} alt={p.name} />
-                          ) : (
-                            <div className="product-placeholder">📦</div>
-                          )}
-                        </div>
-
-                        <div className="product-content">
-                          <h3 className="product-name">{p.name}</h3>
-                          <p className="product-price">π {p.price?.toFixed(2)}</p>
-
-                          <div className="product-meta">
-                            <span>📦 {p.piecesPerBox} pieces per box</span>
-                            {p.flavors?.length > 0 && (
-                              <span>🎨 {p.flavors.length} flavor{p.flavors.length !== 1 ? 's' : ''}</span>
+                    {filteredProducts.map(p => {
+                      const stock = p.stock || 0
+                      const stockStatus = stock <= 0 ? 'out-of-stock' : stock < 10 ? 'low-stock' : 'in-stock'
+                      const stockLabel = stock <= 0 ? 'Out of Stock' : stock < 10 ? 'Low Stock' : 'In Stock'
+                      
+                      return (
+                        <div key={p.id} className="product-card">
+                          <div className="product-image-container">
+                            {p.imageUrl ? (
+                              <img src={p.imageUrl} alt={p.name} />
+                            ) : (
+                              <div className="product-placeholder">📦</div>
                             )}
                           </div>
 
-                          <div className="product-actions">
-                            <button
-                              onClick={() => handleEdit(p)}
-                              className="product-btn edit"
+                          <div className="product-content">
+                            <h3 className="product-name">{p.name}</h3>
+                            <p className="product-price">π {p.price?.toFixed(2)}</p>
+
+                            <div className="product-meta">
+                              <span>📦 {p.piecesPerBox} pieces per box</span>
+                              {p.flavors?.length > 0 && (
+                                <span>🎨 {p.flavors.length} flavor{p.flavors.length !== 1 ? 's' : ''}</span>
+                              )}
+                              <span className={`stock-badge ${stockStatus}`}>
+                                {stockLabel}: {stock} units
+                              </span>
+                            </div>
+
+                            <button 
+                              className="stock-btn"
+                              onClick={() => setStockEditModal(p)}
                             >
-                              Edit
+                              📊 Update Stock
                             </button>
-                            <button
-                              onClick={() => setDeleteConfirm(p)}
-                              className="product-btn delete"
-                            >
-                              Delete
-                            </button>
+
+                            <div className="product-actions">
+                              <button
+                                onClick={() => handleEdit(p)}
+                                className="product-btn edit"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirm(p)}
+                                className="product-btn delete"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : (
                   <div className="empty-state">
@@ -2342,62 +1838,58 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders.map(order => (
-                      <tr key={order.id}>
-                        <td>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <span className="order-id">{order.orderId}</span>
-                            <span className="payment-id">Payment: {order.paymentId?.slice(0, 16)}...</span>
-                            <span className={`status-badge ${order.status}`}>
-                              {order.status === 'completed' ? '✓ Paid' : order.status}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="order-items">
-                          {order.items?.map((item, idx) => {
-                            const imageUrl = getProductImage(item)
-                            return (
+                    {filteredOrders.map(order => {
+                      const stockIssues = checkStockAvailability(order)
+                      const hasStockIssues = stockIssues.length > 0
+                      
+                      return (
+                        <tr key={order.id}>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              <span className="order-id">{order.orderId}</span>
+                              <span className="payment-id">Payment: {order.paymentId?.slice(0, 16)}...</span>
+                              <span className={`status-badge ${order.status}`}>
+                                {order.status === 'completed' ? '✓ Paid' : order.status}
+                              </span>
+                              {hasStockIssues && (
+                                <span className="status-badge pending" style={{ marginTop: '4px' }}>
+                                  ⚠️ Stock Issues
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="order-items">
+                            {order.items?.map((item, idx) => (
                               <div key={idx} className="order-item">
-                                {imageUrl ? (
-                                  <img 
-                                    src={imageUrl} 
-                                    alt={item.name} 
-                                    className="item-image"
-                                    onError={(e) => {
-                                      e.target.style.display = 'none'
-                                      e.target.nextSibling.style.display = 'flex'
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="item-placeholder">📦</div>
-                                )}
+                                <div className="item-placeholder">📦</div>
                                 <div className="item-details">
                                   <span className="item-name">{item.name}</span>
                                   <span className="item-meta">{item.quantity} × π {item.price?.toFixed(2)}</span>
                                 </div>
                               </div>
-                            )
-                          })}
-                        </td>
-                        <td>
-                          <span className="order-total">
-                            π {order.totalPrice?.toFixed(2)}
-                          </span>
-                          <span className="currency-badge">{order.currency}</span>
-                        </td>
-                        <td>
-                          {formatDate(order.createdAt)}
-                        </td>
-                        <td>
-                          <button
-                            onClick={() => setConfirmPaymentModal(order)}
-                            className="confirm-btn"
-                          >
-                            ✓ Confirm
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            ))}
+                          </td>
+                          <td>
+                            <span className="order-total">
+                              π {order.totalPrice?.toFixed(2)}
+                            </span>
+                            <span className="currency-badge">{order.currency}</span>
+                          </td>
+                          <td>
+                            {formatDate(order.createdAt)}
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => setConfirmPaymentModal(order)}
+                              className="confirm-btn"
+                              style={hasStockIssues ? { background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' } : {}}
+                            >
+                              {hasStockIssues ? '⚠️ Review' : '✓ Confirm'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2440,26 +1932,16 @@ export default function Dashboard() {
                     </div>
                     
                     <div className="confirmed-section">
-                      <div className="confirmed-label">Order Items ({payment.totalItems})</div>
+                      <div className="confirmed-label">Order Items</div>
                       <div className="confirmed-items-list">
                         {payment.items?.map((item, idx) => (
                           <div key={idx} className="confirmed-item">
-                            {item.imageUrl ? (
-                              <img 
-                                src={item.imageUrl} 
-                                alt={item.name} 
-                                className="confirmed-item-image"
-                                onError={(e) => {
-                                  e.target.style.display = 'none'
-                                  e.target.nextSibling.style.display = 'flex'
-                                }}
-                              />
-                            ) : (
-                              <div className="confirmed-item-placeholder">📦</div>
-                            )}
                             <div className="confirmed-item-info">
-                              <div className="confirmed-item-name">{item.name}</div>
-                              <div className="confirmed-item-qty">Quantity: {item.quantity}</div>
+                              <div className="confirmed-item-img">📦</div>
+                              <div>
+                                <div className="confirmed-item-name">{item.name}</div>
+                                <div className="confirmed-item-qty">Qty: {item.quantity}</div>
+                              </div>
                             </div>
                             <div className="confirmed-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
                           </div>
@@ -2481,6 +1963,11 @@ export default function Dashboard() {
                       <div className="confirmed-meta-item">
                         👤 Confirmed by: {payment.confirmedByEmail}
                       </div>
+                      {payment.stockDeducted && (
+                        <div className="confirmed-meta-item" style={{ color: '#059669' }}>
+                          📦 Stock automatically deducted
+                        </div>
+                      )}
                       <div className="confirmed-meta-item" style={{ marginTop: '8px' }}>
                         <span className={`shipping-status ${payment.shippingStatus}`}>
                           🚚 {payment.shippingStatus === 'shipped' ? 'Shipped' : 'Pending Shipping'}
@@ -2519,6 +2006,76 @@ export default function Dashboard() {
                   className="modal-btn confirm"
                 >
                   Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stock Edit Modal */}
+        {stockEditModal && (
+          <div className="modal-overlay" onClick={() => setStockEditModal(null)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3 className="modal-title">📊 Update Stock</h3>
+                <p className="modal-subtitle">
+                  Set available stock quantity for {stockEditModal.name}
+                </p>
+              </div>
+              
+              <div className="stock-current">
+                <div className="stock-current-label">Current Stock</div>
+                <div className="stock-current-value">{stockEditModal.stock || 0}</div>
+              </div>
+
+              <div className="modal-section">
+                <div className="modal-section-title">New Stock Quantity</div>
+                <div className="stock-input-group">
+                  <button 
+                    className="stock-adjust-btn"
+                    onClick={() => {
+                      const input = document.getElementById('stock-input')
+                      input.value = Math.max(0, parseInt(input.value || 0) - 1)
+                    }}
+                  >
+                    −
+                  </button>
+                  <input
+                    id="stock-input"
+                    type="number"
+                    className="stock-input"
+                    defaultValue={stockEditModal.stock || 0}
+                    min="0"
+                    autoFocus
+                  />
+                  <button 
+                    className="stock-adjust-btn"
+                    onClick={() => {
+                      const input = document.getElementById('stock-input')
+                      input.value = parseInt(input.value || 0) + 1
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  onClick={() => setStockEditModal(null)}
+                  className="modal-btn cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('stock-input')
+                    handleStockUpdate(stockEditModal.id, input.value)
+                  }}
+                  className="modal-btn confirm-payment"
+                  disabled={stockUpdateLoading}
+                >
+                  {stockUpdateLoading ? '⏳ Updating...' : '💾 Save Stock'}
                 </button>
               </div>
             </div>
@@ -2564,25 +2121,30 @@ export default function Dashboard() {
                 <div className="modal-section-title">Order Items ({confirmPaymentModal.totalItems})</div>
                 <div className="modal-items">
                   {confirmPaymentModal.items?.map((item, idx) => {
-                    const imageUrl = getProductImage(item)
+                    const product = products.find(p => p.id === item.id || p.name === item.name)
+                    const availableStock = product?.stock || 0
+                    const hasEnoughStock = availableStock >= item.quantity
+                    
                     return (
-                      <div key={idx} className="modal-item">
-                        {imageUrl ? (
-                          <img 
-                            src={imageUrl} 
-                            alt={item.name} 
-                            className="modal-item-image"
-                            onError={(e) => {
-                              e.target.style.display = 'none'
-                              e.target.nextSibling.style.display = 'flex'
-                            }}
-                          />
-                        ) : (
-                          <div className="modal-item-placeholder">📦</div>
-                        )}
-                        <div className="modal-item-details">
-                          <h4>{item.name}</h4>
-                          <p>Qty: {item.quantity} × π {item.price?.toFixed(2)}</p>
+                      <div key={idx} className="modal-item" style={{ 
+                        borderColor: hasEnoughStock ? '#e2e8f0' : '#ef4444',
+                        background: hasEnoughStock ? '#ffffff' : '#fee2e2'
+                      }}>
+                        <div className="modal-item-info">
+                          <div className="modal-item-img">📦</div>
+                          <div className="modal-item-details">
+                            <h4>{item.name}</h4>
+                            <p>Qty: {item.quantity} × π {item.price?.toFixed(2)}</p>
+                            <p style={{ 
+                              fontSize: '0.8rem', 
+                              color: hasEnoughStock ? '#059669' : '#dc2626',
+                              fontWeight: 600
+                            }}>
+                              {hasEnoughStock 
+                                ? `✓ In stock: ${availableStock} available` 
+                                : `✗ Only ${availableStock} in stock (need ${item.quantity})`}
+                            </p>
+                          </div>
                         </div>
                         <div className="modal-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
                       </div>
@@ -2617,7 +2179,7 @@ export default function Dashboard() {
                   onClick={() => handleConfirmPayment(confirmPaymentModal)}
                   className="modal-btn confirm-payment"
                 >
-                  ✓ Confirm Payment & Ready for Shipping
+                  ✓ Confirm Payment & Update Stock
                 </button>
               </div>
             </div>
