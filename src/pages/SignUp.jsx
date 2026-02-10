@@ -17,20 +17,18 @@ export default function SignUp() {
     setError('')
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match.')
+      setError('no accounts avilable')
       return
     }
 
     if (password.length < 6) {
-      setError('Password must be at least 6 characters.')
-      return
+setError('no accounts avilable')
+  return
     }
 
     setLoading(true)
     try {
-      await createUserWithEmailAndPassword(auth, email, password)
-      alert('Admin account created! Please sign in.')
-      navigate('/login')
+setError('no accounts avilable')     
     } catch (err) {
       console.error(err)
       let message = 'Failed to create account.'
