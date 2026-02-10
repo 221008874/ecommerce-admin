@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
 import { useEffect, useState } from 'react'
-import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp } from 'firebase/firestore'
+import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp, where } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { db, auth } from '../services/firebase'
 import { useAuth } from '../context/AuthContext'
@@ -46,9 +46,15 @@ export default function Dashboard() {
 
   const loadOrders = async () => {
     try {
+      // Load orders that are not yet confirmed (status is completed but not confirmed by admin)
       const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'))
       const snapshot = await getDocs(q)
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      const list = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data(),
+        // Ensure we have a confirmed status field, default to false if not present
+        adminConfirmed: doc.data().adminConfirmed || false
+      }))
       setOrders(list)
     } catch (err) {
       console.error('Error loading orders:', err)
@@ -68,28 +74,45 @@ export default function Dashboard() {
 
   const handleConfirmPayment = async (order) => {
     try {
-      // Add to confirmedPayments collection
+      // Add to confirmedPayments collection with your data structure
       await addDoc(collection(db, 'confirmedPayments'), {
-        orderId: order.id,
-        customerName: order.customerName,
-        customerEmail: order.customerEmail,
-        customerPhone: order.customerPhone,
-        shippingAddress: order.shippingAddress,
-        items: order.items,
-        totalAmount: order.totalAmount,
-        originalOrderDate: order.createdAt,
+        originalOrderId: order.id,
+        orderId: order.orderId, // The custom order ID like "order_1770364914207"
+        paymentId: order.paymentId,
+        
+        // Customer info - try to extract from available data or use defaults
+        customerInfo: {
+          // Since your data doesn't have customer fields, we'll store what we have
+          // You may want to update your order creation to include these fields
+          orderReference: order.orderId
+        },
+        
+        // Items from your structure
+        items: order.items || [],
+        totalItems: order.totalItems || 0,
+        totalPrice: order.totalPrice || 0,
+        currency: order.currency || 'PI',
+        
+        // Original timestamps
+        originalCreatedAt: order.createdAt,
+        
+        // Confirmation details
         confirmedBy: currentUser.uid,
         confirmedByEmail: currentUser.email,
         confirmedAt: serverTimestamp(),
-        status: 'confirmed',
-        notes: ''
+        adminConfirmed: true,
+        
+        // Status
+        status: 'confirmed_for_shipping',
+        shippingStatus: 'pending'
       })
 
-      // Update order status
+      // Update order to mark as admin confirmed
       await updateDoc(doc(db, 'orders', order.id), {
-        paymentStatus: 'confirmed',
-        confirmedAt: serverTimestamp(),
-        confirmedBy: currentUser.uid
+        adminConfirmed: true,
+        adminConfirmedAt: serverTimestamp(),
+        adminConfirmedBy: currentUser.uid,
+        shippingStatus: 'pending'
       })
 
       setConfirmPaymentModal(null)
@@ -133,26 +156,39 @@ export default function Dashboard() {
   }
 
   const filteredProducts = products.filter(p =>
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.description.toLowerCase().includes(searchQuery.toLowerCase())
+    p.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    p.description?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const filteredOrders = orders.filter(o =>
-    o.customerName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    o.customerEmail?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    o.id.toLowerCase().includes(searchQuery.toLowerCase())
+  // Filter orders - show only completed payments that haven't been admin confirmed
+  const pendingOrders = orders.filter(o => 
+    o.status === 'completed' && !o.adminConfirmed
+  )
+
+  const filteredOrders = pendingOrders.filter(o =>
+    o.orderId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    o.paymentId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    o.items?.some(item => item.name?.toLowerCase().includes(searchQuery.toLowerCase()))
   )
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A'
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp)
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp)
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch (e) {
+      return 'Invalid Date'
+    }
+  }
+
+  const formatCurrency = (amount, currency = 'PI') => {
+    return `${currency} ${Number(amount).toFixed(2)}`
   }
 
   return (
@@ -249,6 +285,7 @@ export default function Dashboard() {
           border-radius: 12px;
           border: 1px solid #e2e8f0;
           box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+          overflow-x: auto;
         }
 
         .nav-tab {
@@ -265,6 +302,7 @@ export default function Dashboard() {
           align-items: center;
           gap: 8px;
           position: relative;
+          white-space: nowrap;
         }
 
         .nav-tab:hover {
@@ -317,10 +355,6 @@ export default function Dashboard() {
         .add-btn:hover {
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(15, 23, 42, 0.3);
-        }
-
-        .add-btn:active {
-          transform: translateY(0);
         }
 
         .search-box {
@@ -409,7 +443,7 @@ export default function Dashboard() {
           }
         }
 
-        /* Products Section */
+        /* Section Headers */
         .section-header {
           margin-bottom: 32px;
         }
@@ -631,38 +665,78 @@ export default function Dashboard() {
           background: #f1f5f9;
           padding: 4px 8px;
           border-radius: 4px;
+          display: inline-block;
         }
 
-        .customer-info {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .customer-name {
-          font-weight: 700;
-          color: #0f172a;
-        }
-
-        .customer-email {
-          font-size: 0.85rem;
-          color: #64748b;
+        .payment-id {
+          font-size: 0.8rem;
+          color: #94a3b8;
+          margin-top: 4px;
         }
 
         .order-items {
-          max-width: 200px;
+          max-width: 250px;
         }
 
         .order-item {
-          font-size: 0.85rem;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 0.9rem;
           color: #475569;
-          margin-bottom: 4px;
+          margin-bottom: 6px;
+          padding: 4px 0;
+        }
+
+        .item-image {
+          width: 32px;
+          height: 32px;
+          border-radius: 6px;
+          object-fit: cover;
+          background: #f1f5f9;
+        }
+
+        .item-placeholder {
+          width: 32px;
+          height: 32px;
+          border-radius: 6px;
+          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1rem;
+        }
+
+        .item-details {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .item-name {
+          font-weight: 600;
+          color: #0f172a;
+        }
+
+        .item-meta {
+          font-size: 0.8rem;
+          color: #64748b;
         }
 
         .order-total {
           font-weight: 800;
           font-size: 1.1rem;
           color: #0f172a;
+        }
+
+        .currency-badge {
+          display: inline-block;
+          background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+          color: #ffffff;
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 0.75rem;
+          font-weight: 700;
+          margin-left: 8px;
         }
 
         .status-badge {
@@ -677,34 +751,30 @@ export default function Dashboard() {
           letter-spacing: 0.5px;
         }
 
+        .status-badge.completed {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
         .status-badge.pending {
           background: #fef3c7;
           color: #92400e;
         }
 
-        .status-badge.confirmed {
-          background: #d1fae5;
-          color: #065f46;
-        }
-
-        .status-badge.shipping {
-          background: #dbeafe;
-          color: #1e40af;
-        }
-
         .confirm-btn {
-          padding: 8px 16px;
+          padding: 10px 20px;
           background: linear-gradient(135deg, #059669 0%, #047857 100%);
           color: #ffffff;
           border: none;
-          border-radius: 6px;
+          border-radius: 8px;
           font-weight: 700;
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           cursor: pointer;
           transition: all 0.3s ease;
           display: inline-flex;
           align-items: center;
           gap: 6px;
+          box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
         }
 
         .confirm-btn:hover {
@@ -712,27 +782,10 @@ export default function Dashboard() {
           box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
 
-        .view-btn {
-          padding: 8px 16px;
-          background: #f1f5f9;
-          color: #475569;
-          border: 1px solid #e2e8f0;
-          border-radius: 6px;
-          font-weight: 600;
-          font-size: 0.85rem;
-          cursor: pointer;
-          transition: all 0.3s ease;
-        }
-
-        .view-btn:hover {
-          background: #e2e8f0;
-          color: #0f172a;
-        }
-
         /* Confirmed Payments Cards */
         .confirmed-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
           gap: 24px;
         }
 
@@ -744,6 +797,7 @@ export default function Dashboard() {
           box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
           transition: all 0.3s ease;
           border-left: 4px solid #059669;
+          animation: fadeIn 0.4s ease-out;
         }
 
         .confirmed-card:hover {
@@ -755,18 +809,27 @@ export default function Dashboard() {
           display: flex;
           justify-content: space-between;
           align-items: start;
-          margin-bottom: 16px;
+          margin-bottom: 20px;
           padding-bottom: 16px;
           border-bottom: 1px solid #f1f5f9;
         }
 
-        .confirmed-id {
+        .confirmed-ids {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .confirmed-order-id {
           font-family: monospace;
+          font-size: 0.9rem;
+          color: #0f172a;
+          font-weight: 700;
+        }
+
+        .confirmed-payment-id {
           font-size: 0.8rem;
           color: #64748b;
-          background: #f1f5f9;
-          padding: 4px 8px;
-          border-radius: 4px;
         }
 
         .confirmed-date {
@@ -776,86 +839,147 @@ export default function Dashboard() {
           display: flex;
           align-items: center;
           gap: 6px;
+          background: #d1fae5;
+          padding: 6px 12px;
+          border-radius: 20px;
         }
 
-        .confirmed-customer {
+        .confirmed-section {
           margin-bottom: 16px;
         }
 
-        .confirmed-customer-name {
+        .confirmed-label {
+          font-size: 0.8rem;
+          color: #94a3b8;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-bottom: 8px;
           font-weight: 700;
-          color: #0f172a;
-          font-size: 1.1rem;
-          margin-bottom: 4px;
         }
 
-        .confirmed-customer-details {
-          font-size: 0.9rem;
-          color: #64748b;
-        }
-
-        .confirmed-items {
+        .confirmed-items-list {
           background: #f8fafc;
           border-radius: 8px;
           padding: 12px;
-          margin-bottom: 16px;
         }
 
         .confirmed-item {
           display: flex;
           justify-content: space-between;
-          font-size: 0.9rem;
-          padding: 4px 0;
-          color: #475569;
+          align-items: center;
+          padding: 8px 0;
+          border-bottom: 1px solid #e2e8f0;
+        }
+
+        .confirmed-item:last-child {
+          border-bottom: none;
+        }
+
+        .confirmed-item-info {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .confirmed-item-img {
+          width: 40px;
+          height: 40px;
+          border-radius: 8px;
+          object-fit: cover;
+          background: #e2e8f0;
+        }
+
+        .confirmed-item-name {
+          font-weight: 600;
+          color: #0f172a;
+        }
+
+        .confirmed-item-qty {
+          font-size: 0.85rem;
+          color: #64748b;
+        }
+
+        .confirmed-item-price {
+          font-weight: 700;
+          color: #0f172a;
         }
 
         .confirmed-total {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding-top: 16px;
-          border-top: 2px solid #f1f5f9;
+          padding: 16px;
+          background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+          border-radius: 8px;
+          margin-top: 16px;
         }
 
         .confirmed-total-label {
-          font-weight: 600;
-          color: #64748b;
+          font-weight: 700;
+          color: #065f46;
         }
 
         .confirmed-total-amount {
-          font-size: 1.3rem;
+          font-size: 1.4rem;
           font-weight: 800;
           color: #059669;
         }
 
         .confirmed-meta {
-          margin-top: 12px;
-          padding-top: 12px;
+          margin-top: 16px;
+          padding-top: 16px;
           border-top: 1px solid #f1f5f9;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
           font-size: 0.85rem;
-          color: #94a3b8;
+          color: #64748b;
         }
 
-        /* Delete Confirmation Modal */
+        .confirmed-meta-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .shipping-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 0.75rem;
+          font-weight: 700;
+          background: #fef3c7;
+          color: #92400e;
+        }
+
+        .shipping-status.shipped {
+          background: #dbeafe;
+          color: #1e40af;
+        }
+
+        /* Modal Styles */
         .modal-overlay {
           position: fixed;
           inset: 0;
-          background: rgba(0, 0, 0, 0.4);
+          background: rgba(0, 0, 0, 0.5);
           display: flex;
           align-items: center;
           justify-content: center;
           z-index: 200;
           animation: fadeIn 0.2s ease-out;
           padding: 20px;
+          backdrop-filter: blur(4px);
         }
 
         .modal {
           background: #ffffff;
-          border-radius: 12px;
+          border-radius: 16px;
           padding: 32px;
-          max-width: 500px;
+          max-width: 600px;
           width: 100%;
-          box-shadow: 0 20px 25px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
           animation: slideUp 0.3s ease-out;
           max-height: 90vh;
           overflow-y: auto;
@@ -872,31 +996,119 @@ export default function Dashboard() {
           }
         }
 
+        .modal-header {
+          margin-bottom: 24px;
+        }
+
         .modal-title {
-          font-size: 1.3rem;
+          font-size: 1.5rem;
           font-weight: 800;
           color: #0f172a;
+          margin-bottom: 8px;
+        }
+
+        .modal-subtitle {
+          color: #64748b;
+          font-size: 0.95rem;
+        }
+
+        .modal-section {
+          background: #f8fafc;
+          border-radius: 12px;
+          padding: 20px;
+          margin-bottom: 20px;
+        }
+
+        .modal-section-title {
+          font-size: 0.85rem;
+          color: #94a3b8;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 700;
           margin-bottom: 12px;
         }
 
-        .modal-text {
+        .modal-items {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .modal-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px;
+          background: #ffffff;
+          border-radius: 8px;
+          border: 1px solid #e2e8f0;
+        }
+
+        .modal-item-info {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .modal-item-img {
+          width: 48px;
+          height: 48px;
+          border-radius: 8px;
+          object-fit: cover;
+          background: #f1f5f9;
+        }
+
+        .modal-item-details h4 {
+          font-weight: 700;
+          color: #0f172a;
+          margin-bottom: 4px;
+        }
+
+        .modal-item-details p {
+          font-size: 0.85rem;
           color: #64748b;
-          margin-bottom: 28px;
-          line-height: 1.5;
+        }
+
+        .modal-item-price {
+          font-weight: 800;
+          color: #0f172a;
+          font-size: 1.1rem;
+        }
+
+        .modal-summary {
+          background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+          border: 2px solid #059669;
+        }
+
+        .modal-summary-row {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 8px;
+          font-size: 0.95rem;
+        }
+
+        .modal-summary-row:last-child {
+          margin-bottom: 0;
+          padding-top: 12px;
+          border-top: 1px solid #059669;
+          font-weight: 800;
+          font-size: 1.2rem;
+          color: #059669;
         }
 
         .modal-actions {
           display: flex;
           gap: 12px;
+          margin-top: 24px;
         }
 
         .modal-btn {
           flex: 1;
-          padding: 12px 16px;
+          padding: 14px 24px;
           border: 2px solid;
-          border-radius: 8px;
+          border-radius: 10px;
           font-weight: 700;
-          font-size: 0.9rem;
+          font-size: 0.95rem;
           cursor: pointer;
           transition: all 0.3s ease;
         }
@@ -909,60 +1121,19 @@ export default function Dashboard() {
 
         .modal-btn.cancel:hover {
           background: #e2e8f0;
-        }
-
-        .modal-btn.confirm {
-          background: #e11d48;
-          border-color: #e11d48;
-          color: #ffffff;
-        }
-
-        .modal-btn.confirm:hover {
-          background: #be123c;
-          border-color: #be123c;
+          color: #0f172a;
         }
 
         .modal-btn.confirm-payment {
           background: linear-gradient(135deg, #059669 0%, #047857 100%);
           border-color: transparent;
           color: #ffffff;
+          box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
 
         .modal-btn.confirm-payment:hover {
           transform: translateY(-2px);
-          box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-
-        /* Order Details in Modal */
-        .order-details {
-          background: #f8fafc;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 24px;
-        }
-
-        .detail-row {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 12px;
-          font-size: 0.95rem;
-        }
-
-        .detail-row:last-child {
-          margin-bottom: 0;
-          padding-top: 12px;
-          border-top: 1px solid #e2e8f0;
-          font-weight: 700;
-          color: #0f172a;
-        }
-
-        .detail-label {
-          color: #64748b;
-        }
-
-        .detail-value {
-          color: #0f172a;
-          font-weight: 600;
+          box-shadow: 0 6px 16px rgba(5, 150, 105, 0.4);
         }
 
         /* Empty State */
@@ -1071,12 +1242,14 @@ export default function Dashboard() {
           }
 
           .nav-tabs {
-            flex-direction: column;
+            flex-direction: row;
+            overflow-x: auto;
+            padding: 4px;
           }
 
           .nav-tab {
-            width: 100%;
-            justify-content: center;
+            padding: 10px 16px;
+            font-size: 0.9rem;
           }
 
           .main {
@@ -1120,8 +1293,8 @@ export default function Dashboard() {
           }
 
           .modal {
-            margin: 20px;
-            max-width: calc(100% - 40px);
+            margin: 10px;
+            padding: 20px;
           }
 
           .section-title {
@@ -1145,6 +1318,10 @@ export default function Dashboard() {
           .confirmed-card {
             padding: 16px;
           }
+
+          .modal-actions {
+            flex-direction: column;
+          }
         }
 
         @media (max-width: 480px) {
@@ -1164,10 +1341,6 @@ export default function Dashboard() {
 
           .form-section {
             padding: 16px;
-          }
-
-          .modal {
-            margin: 12px;
           }
 
           .product-content {
@@ -1213,7 +1386,7 @@ export default function Dashboard() {
             onClick={() => setActiveTab('orders')}
           >
             🛒 Orders
-            <span className="tab-badge">{orders.filter(o => o.paymentStatus !== 'confirmed').length}</span>
+            <span className="tab-badge">{pendingOrders.length}</span>
           </button>
           <button
             className={`nav-tab ${activeTab === 'confirmed' ? 'active' : ''}`}
@@ -1248,28 +1421,13 @@ export default function Dashboard() {
           </div>
         )}
 
-        {activeTab === 'orders' && (
+        {(activeTab === 'orders' || activeTab === 'confirmed') && (
           <div className="actions-bar">
             <div className="search-box" style={{ maxWidth: '100%' }}>
               <span className="search-icon">🔍</span>
               <input
                 type="text"
-                placeholder="Search orders by customer name, email, or order ID..."
-                className="search-input"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'confirmed' && (
-          <div className="actions-bar">
-            <div className="search-box" style={{ maxWidth: '100%' }}>
-              <span className="search-icon">🔍</span>
-              <input
-                type="text"
-                placeholder="Search confirmed payments..."
+                placeholder={activeTab === 'orders' ? "Search by Order ID, Payment ID, or product name..." : "Search confirmed payments..."}
                 className="search-input"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -1314,12 +1472,10 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Loading State */}
             {isLoading && (
               <div className="loading-spinner">⏳</div>
             )}
 
-            {/* Products Grid */}
             {!isLoading && (
               <>
                 {filteredProducts.length > 0 ? (
@@ -1393,72 +1549,76 @@ export default function Dashboard() {
             <div className="section-header">
               <h2 className="section-title">
                 🛒 Pending Orders
-                <span className="section-count">{filteredOrders.filter(o => o.paymentStatus !== 'confirmed').length}</span>
+                <span className="section-count">{filteredOrders.length}</span>
               </h2>
               <p className="section-subtitle">
-                Review and confirm payments for shipping
+                Orders with completed payment awaiting confirmation for shipping
               </p>
             </div>
 
-            {filteredOrders.filter(o => o.paymentStatus !== 'confirmed').length > 0 ? (
+            {filteredOrders.length > 0 ? (
               <div className="orders-container">
                 <table className="orders-table">
                   <thead>
                     <tr>
-                      <th>Order ID</th>
-                      <th>Customer</th>
+                      <th>Order Details</th>
                       <th>Items</th>
                       <th>Total</th>
-                      <th>Status</th>
-                      <th>Actions</th>
+                      <th>Date</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders
-                      .filter(o => o.paymentStatus !== 'confirmed')
-                      .map(order => (
-                        <tr key={order.id}>
-                          <td>
-                            <span className="order-id">#{order.id.slice(-6)}</span>
-                          </td>
-                          <td>
-                            <div className="customer-info">
-                              <span className="customer-name">{order.customerName}</span>
-                              <span className="customer-email">{order.customerEmail}</span>
-                            </div>
-                          </td>
-                          <td className="order-items">
-                            {order.items?.map((item, idx) => (
-                              <div key={idx} className="order-item">
-                                {item.quantity}x {item.name}
-                              </div>
-                            ))}
-                          </td>
-                          <td className="order-total">
-                            π {order.totalAmount?.toFixed(2)}
-                          </td>
-                          <td>
-                            <span className={`status-badge ${order.paymentStatus || 'pending'}`}>
-                              {order.paymentStatus === 'confirmed' ? '✓ Confirmed' : '⏳ Pending'}
+                    {filteredOrders.map(order => (
+                      <tr key={order.id}>
+                        <td>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <span className="order-id">{order.orderId}</span>
+                            <span className="payment-id">Payment: {order.paymentId?.slice(0, 16)}...</span>
+                            <span className={`status-badge ${order.status}`}>
+                              {order.status === 'completed' ? '✓ Paid' : order.status}
                             </span>
-                          </td>
-                          <td>
-                            <button
-                              onClick={() => setConfirmPaymentModal(order)}
-                              className="confirm-btn"
-                            >
-                              ✓ Confirm
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                          </div>
+                        </td>
+                        <td className="order-items">
+                          {order.items?.map((item, idx) => (
+                            <div key={idx} className="order-item">
+                              <div className="item-placeholder">📦</div>
+                              <div className="item-details">
+                                <span className="item-name">{item.name}</span>
+                                <span className="item-meta">{item.quantity} × π {item.price?.toFixed(2)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </td>
+                        <td>
+                          <span className="order-total">
+                            π {order.totalPrice?.toFixed(2)}
+                          </span>
+                          <span className="currency-badge">{order.currency}</span>
+                        </td>
+                        <td>
+                          {formatDate(order.createdAt)}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => setConfirmPaymentModal(order)}
+                            className="confirm-btn"
+                          >
+                            ✓ Confirm
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
             ) : (
               <div className="empty-state">
                 <div className="empty-icon">📭</div>
-                <p className="empty-text">No pending orders</p>
+                <p className="empty-text">
+                  {searchQuery ? 'No orders match your search' : 'No pending orders'}
+                </p>
               </div>
             )}
           </>
@@ -1482,35 +1642,52 @@ export default function Dashboard() {
                 {confirmedPayments.map(payment => (
                   <div key={payment.id} className="confirmed-card">
                     <div className="confirmed-header">
-                      <span className="confirmed-id">#{payment.orderId?.slice(-6)}</span>
+                      <div className="confirmed-ids">
+                        <div className="confirmed-order-id">{payment.orderId}</div>
+                        <div className="confirmed-payment-id">Payment: {payment.paymentId?.slice(0, 20)}...</div>
+                      </div>
                       <span className="confirmed-date">
                         ✓ {formatDate(payment.confirmedAt)}
                       </span>
                     </div>
                     
-                    <div className="confirmed-customer">
-                      <div className="confirmed-customer-name">{payment.customerName}</div>
-                      <div className="confirmed-customer-details">
-                        {payment.customerEmail} • {payment.customerPhone}
+                    <div className="confirmed-section">
+                      <div className="confirmed-label">Order Items</div>
+                      <div className="confirmed-items-list">
+                        {payment.items?.map((item, idx) => (
+                          <div key={idx} className="confirmed-item">
+                            <div className="confirmed-item-info">
+                              <div className="confirmed-item-img">📦</div>
+                              <div>
+                                <div className="confirmed-item-name">{item.name}</div>
+                                <div className="confirmed-item-qty">Qty: {item.quantity}</div>
+                              </div>
+                            </div>
+                            <div className="confirmed-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-
-                    <div className="confirmed-items">
-                      {payment.items?.map((item, idx) => (
-                        <div key={idx} className="confirmed-item">
-                          <span>{item.quantity}x {item.name}</span>
-                          <span>π {(item.price * item.quantity).toFixed(2)}</span>
-                        </div>
-                      ))}
                     </div>
 
                     <div className="confirmed-total">
                       <span className="confirmed-total-label">Total Amount</span>
-                      <span className="confirmed-total-amount">π {payment.totalAmount?.toFixed(2)}</span>
+                      <span className="confirmed-total-amount">
+                        π {payment.totalPrice?.toFixed(2)} {payment.currency}
+                      </span>
                     </div>
 
                     <div className="confirmed-meta">
-                      Confirmed by: {payment.confirmedByEmail} • Original order: {formatDate(payment.originalOrderDate)}
+                      <div className="confirmed-meta-item">
+                        📅 Original Order: {formatDate(payment.originalCreatedAt)}
+                      </div>
+                      <div className="confirmed-meta-item">
+                        👤 Confirmed by: {payment.confirmedByEmail}
+                      </div>
+                      <div className="confirmed-meta-item" style={{ marginTop: '8px' }}>
+                        <span className={`shipping-status ${payment.shippingStatus}`}>
+                          🚚 {payment.shippingStatus === 'shipped' ? 'Shipped' : 'Pending Shipping'}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1554,32 +1731,67 @@ export default function Dashboard() {
         {confirmPaymentModal && (
           <div className="modal-overlay" onClick={() => setConfirmPaymentModal(null)}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>
-              <h3 className="modal-title">✅ Confirm Payment?</h3>
-              <p className="modal-text">
-                Please verify the payment for order <strong>#{confirmPaymentModal.id.slice(-6)}</strong> before confirming.
-                This will mark the order as paid and ready for shipping.
-              </p>
+              <div className="modal-header">
+                <h3 className="modal-title">✅ Confirm Payment for Shipping</h3>
+                <p className="modal-subtitle">
+                  Review order details before confirming payment for shipping
+                </p>
+              </div>
               
-              <div className="order-details">
-                <div className="detail-row">
-                  <span className="detail-label">Customer:</span>
-                  <span className="detail-value">{confirmPaymentModal.customerName}</span>
+              <div className="modal-section">
+                <div className="modal-section-title">Order Information</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Order ID</div>
+                    <div style={{ fontWeight: 700, color: '#0f172a' }}>{confirmPaymentModal.orderId}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Payment ID</div>
+                    <div style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{confirmPaymentModal.paymentId}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Order Date</div>
+                    <div>{formatDate(confirmPaymentModal.createdAt)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Status</div>
+                    <span className={`status-badge ${confirmPaymentModal.status}`}>
+                      {confirmPaymentModal.status}
+                    </span>
+                  </div>
                 </div>
-                <div className="detail-row">
-                  <span className="detail-label">Email:</span>
-                  <span className="detail-value">{confirmPaymentModal.customerEmail}</span>
+              </div>
+
+              <div className="modal-section">
+                <div className="modal-section-title">Order Items ({confirmPaymentModal.totalItems})</div>
+                <div className="modal-items">
+                  {confirmPaymentModal.items?.map((item, idx) => (
+                    <div key={idx} className="modal-item">
+                      <div className="modal-item-info">
+                        <div className="modal-item-img">📦</div>
+                        <div className="modal-item-details">
+                          <h4>{item.name}</h4>
+                          <p>Qty: {item.quantity} × π {item.price?.toFixed(2)}</p>
+                        </div>
+                      </div>
+                      <div className="modal-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
+                    </div>
+                  ))}
                 </div>
-                <div className="detail-row">
-                  <span className="detail-label">Phone:</span>
-                  <span className="detail-value">{confirmPaymentModal.customerPhone}</span>
+              </div>
+
+              <div className="modal-section modal-summary">
+                <div className="modal-summary-row">
+                  <span>Total Items:</span>
+                  <span>{confirmPaymentModal.totalItems}</span>
                 </div>
-                <div className="detail-row">
-                  <span className="detail-label">Items:</span>
-                  <span className="detail-value">{confirmPaymentModal.items?.length} items</span>
+                <div className="modal-summary-row">
+                  <span>Currency:</span>
+                  <span>{confirmPaymentModal.currency}</span>
                 </div>
-                <div className="detail-row">
-                  <span className="detail-label">Total Amount:</span>
-                  <span className="detail-value">π {confirmPaymentModal.totalAmount?.toFixed(2)}</span>
+                <div className="modal-summary-row">
+                  <span>Total Amount:</span>
+                  <span>π {confirmPaymentModal.totalPrice?.toFixed(2)}</span>
                 </div>
               </div>
 
@@ -1594,7 +1806,7 @@ export default function Dashboard() {
                   onClick={() => handleConfirmPayment(confirmPaymentModal)}
                   className="modal-btn confirm-payment"
                 >
-                  ✓ Confirm Payment
+                  ✓ Confirm Payment & Ready for Shipping
                 </button>
               </div>
             </div>
