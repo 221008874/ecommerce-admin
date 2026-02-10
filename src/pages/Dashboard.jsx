@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
 import { useEffect, useState } from 'react'
-import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp, where } from 'firebase/firestore'
+import { collection, getDocs, deleteDoc, doc, addDoc, updateDoc, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { db, auth } from '../services/firebase'
 import { useAuth } from '../context/AuthContext'
@@ -11,6 +11,7 @@ export default function Dashboard() {
   const { currentUser } = useAuth()
   const navigate = useNavigate()
   const [products, setProducts] = useState([])
+  const [productsMap, setProductsMap] = useState({}) // Map of productId -> product data
   const [orders, setOrders] = useState([])
   const [confirmedPayments, setConfirmedPayments] = useState([])
   const [showForm, setShowForm] = useState(false)
@@ -18,7 +19,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState('products') // 'products', 'orders', 'confirmed'
+  const [activeTab, setActiveTab] = useState('products')
   const [confirmPaymentModal, setConfirmPaymentModal] = useState(null)
 
   useEffect(() => {
@@ -37,6 +38,13 @@ export default function Dashboard() {
       const snapshot = await getDocs(collection(db, 'products'))
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
       setProducts(list)
+      
+      // Create a map for quick lookup by product ID
+      const map = {}
+      list.forEach(product => {
+        map[product.id] = product
+      })
+      setProductsMap(map)
     } catch (err) {
       console.error('Error loading products:', err)
     } finally {
@@ -44,15 +52,26 @@ export default function Dashboard() {
     }
   }
 
+  const getProductImage = (item) => {
+    // First check if item has imageUrl directly
+    if (item.imageUrl) return item.imageUrl
+    
+    // Then check if we have the product in our products map
+    if (item.id && productsMap[item.id]?.imageUrl) {
+      return productsMap[item.id].imageUrl
+    }
+    
+    // Return null if no image found
+    return null
+  }
+
   const loadOrders = async () => {
     try {
-      // Load orders that are not yet confirmed (status is completed but not confirmed by admin)
       const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'))
       const snapshot = await getDocs(q)
       const list = snapshot.docs.map(doc => ({ 
         id: doc.id, 
         ...doc.data(),
-        // Ensure we have a confirmed status field, default to false if not present
         adminConfirmed: doc.data().adminConfirmed || false
       }))
       setOrders(list)
@@ -74,40 +93,32 @@ export default function Dashboard() {
 
   const handleConfirmPayment = async (order) => {
     try {
-      // Add to confirmedPayments collection with your data structure
+      // Enrich items with product images before saving
+      const enrichedItems = order.items?.map(item => ({
+        ...item,
+        imageUrl: getProductImage(item) || null
+      })) || []
+
       await addDoc(collection(db, 'confirmedPayments'), {
         originalOrderId: order.id,
-        orderId: order.orderId, // The custom order ID like "order_1770364914207"
+        orderId: order.orderId,
         paymentId: order.paymentId,
-        
-        // Customer info - try to extract from available data or use defaults
         customerInfo: {
-          // Since your data doesn't have customer fields, we'll store what we have
-          // You may want to update your order creation to include these fields
           orderReference: order.orderId
         },
-        
-        // Items from your structure
-        items: order.items || [],
+        items: enrichedItems,
         totalItems: order.totalItems || 0,
         totalPrice: order.totalPrice || 0,
         currency: order.currency || 'PI',
-        
-        // Original timestamps
         originalCreatedAt: order.createdAt,
-        
-        // Confirmation details
         confirmedBy: currentUser.uid,
         confirmedByEmail: currentUser.email,
         confirmedAt: serverTimestamp(),
         adminConfirmed: true,
-        
-        // Status
         status: 'confirmed_for_shipping',
         shippingStatus: 'pending'
       })
 
-      // Update order to mark as admin confirmed
       await updateDoc(doc(db, 'orders', order.id), {
         adminConfirmed: true,
         adminConfirmedAt: serverTimestamp(),
@@ -160,7 +171,6 @@ export default function Dashboard() {
     p.description?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  // Filter orders - show only completed payments that haven't been admin confirmed
   const pendingOrders = orders.filter(o => 
     o.status === 'completed' && !o.adminConfirmed
   )
@@ -185,10 +195,6 @@ export default function Dashboard() {
     } catch (e) {
       return 'Invalid Date'
     }
-  }
-
-  const formatCurrency = (amount, currency = 'PI') => {
-    return `${currency} ${Number(amount).toFixed(2)}`
   }
 
   return (
@@ -675,46 +681,53 @@ export default function Dashboard() {
         }
 
         .order-items {
-          max-width: 250px;
+          max-width: 300px;
         }
 
         .order-item {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 12px;
           font-size: 0.9rem;
           color: #475569;
-          margin-bottom: 6px;
-          padding: 4px 0;
+          margin-bottom: 8px;
+          padding: 6px;
+          background: #f8fafc;
+          border-radius: 8px;
+          border: 1px solid #e2e8f0;
         }
 
         .item-image {
-          width: 32px;
-          height: 32px;
+          width: 40px;
+          height: 40px;
           border-radius: 6px;
           object-fit: cover;
           background: #f1f5f9;
+          border: 1px solid #e2e8f0;
         }
 
         .item-placeholder {
-          width: 32px;
-          height: 32px;
+          width: 40px;
+          height: 40px;
           border-radius: 6px;
           background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 1rem;
+          font-size: 1.2rem;
+          border: 1px solid #e2e8f0;
         }
 
         .item-details {
           display: flex;
           flex-direction: column;
+          flex: 1;
         }
 
         .item-name {
           font-weight: 600;
           color: #0f172a;
+          font-size: 0.9rem;
         }
 
         .item-meta {
@@ -785,7 +798,7 @@ export default function Dashboard() {
         /* Confirmed Payments Cards */
         .confirmed-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
           gap: 24px;
         }
 
@@ -853,55 +866,75 @@ export default function Dashboard() {
           color: #94a3b8;
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          margin-bottom: 8px;
+          margin-bottom: 12px;
           font-weight: 700;
         }
 
         .confirmed-items-list {
-          background: #f8fafc;
-          border-radius: 8px;
-          padding: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
         }
 
         .confirmed-item {
           display: flex;
-          justify-content: space-between;
           align-items: center;
-          padding: 8px 0;
-          border-bottom: 1px solid #e2e8f0;
+          gap: 16px;
+          padding: 12px;
+          background: #f8fafc;
+          border-radius: 10px;
+          border: 1px solid #e2e8f0;
+          transition: all 0.2s ease;
         }
 
-        .confirmed-item:last-child {
-          border-bottom: none;
+        .confirmed-item:hover {
+          background: #f1f5f9;
+          border-color: #cbd5e1;
         }
 
-        .confirmed-item-info {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .confirmed-item-img {
-          width: 40px;
-          height: 40px;
+        .confirmed-item-image {
+          width: 60px;
+          height: 60px;
           border-radius: 8px;
           object-fit: cover;
           background: #e2e8f0;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .confirmed-item-placeholder {
+          width: 60px;
+          height: 60px;
+          border-radius: 8px;
+          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.5rem;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .confirmed-item-info {
+          flex: 1;
         }
 
         .confirmed-item-name {
-          font-weight: 600;
+          font-weight: 700;
           color: #0f172a;
+          font-size: 1rem;
+          margin-bottom: 4px;
         }
 
         .confirmed-item-qty {
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           color: #64748b;
         }
 
         .confirmed-item-price {
-          font-weight: 700;
-          color: #0f172a;
+          font-weight: 800;
+          color: #059669;
+          font-size: 1.1rem;
         }
 
         .confirmed-total {
@@ -910,17 +943,19 @@ export default function Dashboard() {
           align-items: center;
           padding: 16px;
           background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-          border-radius: 8px;
+          border-radius: 10px;
           margin-top: 16px;
+          border: 2px solid #059669;
         }
 
         .confirmed-total-label {
           font-weight: 700;
           color: #065f46;
+          font-size: 1rem;
         }
 
         .confirmed-total-amount {
-          font-size: 1.4rem;
+          font-size: 1.5rem;
           font-weight: 800;
           color: #059669;
         }
@@ -931,7 +966,7 @@ export default function Dashboard() {
           border-top: 1px solid #f1f5f9;
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          gap: 6px;
           font-size: 0.85rem;
           color: #64748b;
         }
@@ -946,9 +981,9 @@ export default function Dashboard() {
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          padding: 4px 10px;
+          padding: 6px 12px;
           border-radius: 20px;
-          font-size: 0.75rem;
+          font-size: 0.8rem;
           font-weight: 700;
           background: #fef3c7;
           color: #92400e;
@@ -977,7 +1012,7 @@ export default function Dashboard() {
           background: #ffffff;
           border-radius: 16px;
           padding: 32px;
-          max-width: 600px;
+          max-width: 700px;
           width: 100%;
           box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
           animation: slideUp 0.3s ease-out;
@@ -1025,7 +1060,7 @@ export default function Dashboard() {
           text-transform: uppercase;
           letter-spacing: 0.5px;
           font-weight: 700;
-          margin-bottom: 12px;
+          margin-bottom: 16px;
         }
 
         .modal-items {
@@ -1036,43 +1071,63 @@ export default function Dashboard() {
 
         .modal-item {
           display: flex;
-          justify-content: space-between;
           align-items: center;
-          padding: 12px;
+          gap: 16px;
+          padding: 16px;
           background: #ffffff;
-          border-radius: 8px;
+          border-radius: 10px;
           border: 1px solid #e2e8f0;
+          transition: all 0.2s ease;
         }
 
-        .modal-item-info {
-          display: flex;
-          align-items: center;
-          gap: 12px;
+        .modal-item:hover {
+          border-color: #cbd5e1;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         }
 
-        .modal-item-img {
-          width: 48px;
-          height: 48px;
-          border-radius: 8px;
+        .modal-item-image {
+          width: 64px;
+          height: 64px;
+          border-radius: 10px;
           object-fit: cover;
           background: #f1f5f9;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-item-placeholder {
+          width: 64px;
+          height: 64px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.8rem;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-item-details {
+          flex: 1;
         }
 
         .modal-item-details h4 {
           font-weight: 700;
           color: #0f172a;
-          margin-bottom: 4px;
+          margin-bottom: 6px;
+          font-size: 1.1rem;
         }
 
         .modal-item-details p {
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           color: #64748b;
         }
 
         .modal-item-price {
           font-weight: 800;
           color: #0f172a;
-          font-size: 1.1rem;
+          font-size: 1.2rem;
         }
 
         .modal-summary {
@@ -1083,16 +1138,17 @@ export default function Dashboard() {
         .modal-summary-row {
           display: flex;
           justify-content: space-between;
-          margin-bottom: 8px;
-          font-size: 0.95rem;
+          margin-bottom: 12px;
+          font-size: 1rem;
+          color: #374151;
         }
 
         .modal-summary-row:last-child {
           margin-bottom: 0;
           padding-top: 12px;
-          border-top: 1px solid #059669;
+          border-top: 2px solid #059669;
           font-weight: 800;
-          font-size: 1.2rem;
+          font-size: 1.3rem;
           color: #059669;
         }
 
@@ -1321,6 +1377,24 @@ export default function Dashboard() {
 
           .modal-actions {
             flex-direction: column;
+          }
+
+          .order-item {
+            padding: 8px;
+          }
+
+          .item-image, .item-placeholder {
+            width: 32px;
+            height: 32px;
+          }
+
+          .confirmed-item {
+            padding: 10px;
+          }
+
+          .confirmed-item-image, .confirmed-item-placeholder {
+            width: 50px;
+            height: 50px;
           }
         }
 
@@ -1581,15 +1655,30 @@ export default function Dashboard() {
                           </div>
                         </td>
                         <td className="order-items">
-                          {order.items?.map((item, idx) => (
-                            <div key={idx} className="order-item">
-                              <div className="item-placeholder">📦</div>
-                              <div className="item-details">
-                                <span className="item-name">{item.name}</span>
-                                <span className="item-meta">{item.quantity} × π {item.price?.toFixed(2)}</span>
+                          {order.items?.map((item, idx) => {
+                            const imageUrl = getProductImage(item)
+                            return (
+                              <div key={idx} className="order-item">
+                                {imageUrl ? (
+                                  <img 
+                                    src={imageUrl} 
+                                    alt={item.name} 
+                                    className="item-image"
+                                    onError={(e) => {
+                                      e.target.style.display = 'none'
+                                      e.target.nextSibling.style.display = 'flex'
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="item-placeholder">📦</div>
+                                )}
+                                <div className="item-details">
+                                  <span className="item-name">{item.name}</span>
+                                  <span className="item-meta">{item.quantity} × π {item.price?.toFixed(2)}</span>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </td>
                         <td>
                           <span className="order-total">
@@ -1652,16 +1741,26 @@ export default function Dashboard() {
                     </div>
                     
                     <div className="confirmed-section">
-                      <div className="confirmed-label">Order Items</div>
+                      <div className="confirmed-label">Order Items ({payment.totalItems})</div>
                       <div className="confirmed-items-list">
                         {payment.items?.map((item, idx) => (
                           <div key={idx} className="confirmed-item">
+                            {item.imageUrl ? (
+                              <img 
+                                src={item.imageUrl} 
+                                alt={item.name} 
+                                className="confirmed-item-image"
+                                onError={(e) => {
+                                  e.target.style.display = 'none'
+                                  e.target.nextSibling.style.display = 'flex'
+                                }}
+                              />
+                            ) : (
+                              <div className="confirmed-item-placeholder">📦</div>
+                            )}
                             <div className="confirmed-item-info">
-                              <div className="confirmed-item-img">📦</div>
-                              <div>
-                                <div className="confirmed-item-name">{item.name}</div>
-                                <div className="confirmed-item-qty">Qty: {item.quantity}</div>
-                              </div>
+                              <div className="confirmed-item-name">{item.name}</div>
+                              <div className="confirmed-item-qty">Quantity: {item.quantity}</div>
                             </div>
                             <div className="confirmed-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
                           </div>
@@ -1765,18 +1864,31 @@ export default function Dashboard() {
               <div className="modal-section">
                 <div className="modal-section-title">Order Items ({confirmPaymentModal.totalItems})</div>
                 <div className="modal-items">
-                  {confirmPaymentModal.items?.map((item, idx) => (
-                    <div key={idx} className="modal-item">
-                      <div className="modal-item-info">
-                        <div className="modal-item-img">📦</div>
+                  {confirmPaymentModal.items?.map((item, idx) => {
+                    const imageUrl = getProductImage(item)
+                    return (
+                      <div key={idx} className="modal-item">
+                        {imageUrl ? (
+                          <img 
+                            src={imageUrl} 
+                            alt={item.name} 
+                            className="modal-item-image"
+                            onError={(e) => {
+                              e.target.style.display = 'none'
+                              e.target.nextSibling.style.display = 'flex'
+                            }}
+                          />
+                        ) : (
+                          <div className="modal-item-placeholder">📦</div>
+                        )}
                         <div className="modal-item-details">
                           <h4>{item.name}</h4>
                           <p>Qty: {item.quantity} × π {item.price?.toFixed(2)}</p>
                         </div>
+                        <div className="modal-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
                       </div>
-                      <div className="modal-item-price">π {(item.price * item.quantity).toFixed(2)}</div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
 
@@ -1815,7 +1927,4 @@ export default function Dashboard() {
       </main>
     </div>
   )
-
-
-  
 }
