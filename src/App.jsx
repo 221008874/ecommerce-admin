@@ -16,7 +16,7 @@ function App() {
         
         {/* Dashboard route */}
         <Route path="/dashboard" element={<DashboardRouter />} />
-          
+        
         {/* Catch all - redirect to login */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
