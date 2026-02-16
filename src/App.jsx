@@ -8,6 +8,7 @@ function App() {
   return (
     <AuthProvider>
       <Routes>
+<<<<<<< HEAD
         {/* Root route - redirect to login if not authenticated, dashboard if authenticated */}
         <Route path="/" element={<Navigate to="/login" replace />} />
         
@@ -19,6 +20,12 @@ function App() {
         
         {/* Catch all - redirect to login */}
         <Route path="*" element={<Navigate to="/login" replace />} />
+=======
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/" element={<SignUp />} /> {/* Default: show sign-up first */}
+        <Route path="*" element={<SignUp />} />
+>>>>>>> 27288618fc4b4c28340a70b1454917150012fa80
       </Routes>
     </AuthProvider>
   )
