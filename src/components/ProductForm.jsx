@@ -1,17 +1,24 @@
 // src/components/ProductForm.jsx
 import { useState } from 'react'
+import { collection, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
+import { db } from '../services/firebase'
 import { uploadImage } from '../services/cloudinary'
-import { collection, addDoc, updateDoc, doc } from 'firebase/firestore'
-import { db } from "../services/firebase"
 
-export default function ProductForm({ product = null, onSuccess }) {
-  const [name, setName] = useState(product?.name || '')
-  const [price, setPrice] = useState(product?.price || '')
-  const [piecesPerBox, setPiecesPerBox] = useState(product?.piecesPerBox || '')
-  const [flavors, setFlavors] = useState(product?.flavors?.join(', ') || '')
-  const [description, setDescription] = useState(product?.description || '')
-  const [imageUrl, setImageUrl] = useState(product?.imageUrl || '')
+export default function ProductForm({ product = null, onSuccess, currency, collectionName }) {
+  // Match previous form data structure exactly
+  const [formData, setFormData] = useState({
+    name: product?.name || '',
+    price: product?.price || '',
+    piecesPerBox: product?.piecesPerBox || '',
+    description: product?.description || '',
+    flavors: product?.flavors?.join(', ') || '',
+    imageUrl: product?.imageUrl || '',
+    stock: product?.stock || 0  // New field for available stock
+  })
+  
+  const [imageFile, setImageFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -29,7 +36,8 @@ export default function ProductForm({ product = null, onSuccess }) {
     setUploading(true)
     try {
       const url = await uploadImage(file)
-      setImageUrl(url)
+      setFormData(prev => ({ ...prev, imageUrl: url }))
+      setImageFile(file)
       setSuccess('Image uploaded successfully!')
       setTimeout(() => setSuccess(''), 3000)
     } catch (err) {
@@ -39,38 +47,54 @@ export default function ProductForm({ product = null, onSuccess }) {
     }
   }
 
+  const handleChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }))
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
+    setIsSubmitting(true)
     
-    if (!name.trim() || !description.trim()) {
+    if (!formData.name.trim() || !formData.description.trim()) {
       setError('Please fill in all required fields')
+      setIsSubmitting(false)
       return
     }
 
+    // Build data object matching previous structure exactly
     const data = {
-      name: name.trim(),
-      price: parseFloat(price),
-      piecesPerBox: parseInt(piecesPerBox),
-      flavors: flavors.split(',').map(f => f.trim()).filter(Boolean),
-      description: description.trim(),
-      imageUrl,
-      createdAt: product ? product.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      name: formData.name.trim(),
+      price: parseFloat(formData.price) || 0,
+      piecesPerBox: parseInt(formData.piecesPerBox) || 0,
+      flavors: formData.flavors.split(',').map(f => f.trim()).filter(Boolean),
+      description: formData.description.trim(),
+      imageUrl: formData.imageUrl,
+      stock: parseInt(formData.stock) || 0,  // Include stock in saved data
+      currency: currency,
+      updatedAt: serverTimestamp()
     }
 
     try {
       if (product) {
-        await updateDoc(doc(db, 'products', product.id), data)
+        await updateDoc(doc(db, collectionName, product.id), data)
       } else {
-        await addDoc(collection(db, 'products'), data)
+        await addDoc(collection(db, collectionName), {
+          ...data,
+          createdAt: serverTimestamp()
+        })
       }
       setSuccess(product ? 'Product updated successfully!' : 'Product added successfully!')
       setTimeout(() => onSuccess(), 500)
     } catch (err) {
       setError(err.message || 'Failed to save product')
+    } finally {
+      setIsSubmitting(false)
     }
   }
+
+  // Get currency symbol
+  const currencySymbol = currency === 'PI' ? 'π' : '£'
 
   return (
     <form onSubmit={handleSubmit} className="product-form">
@@ -79,6 +103,21 @@ export default function ProductForm({ product = null, onSuccess }) {
           display: flex;
           flex-direction: column;
           gap: 32px;
+        }
+
+        .collection-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 16px;
+          background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+          border: 1px solid #cbd5e1;
+          border-radius: 20px;
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: #475569;
+          margin-bottom: 8px;
+          animation: slideDown 0.3s ease-out;
         }
 
         .alert {
@@ -121,7 +160,7 @@ export default function ProductForm({ product = null, onSuccess }) {
           gap: 20px;
         }
 
-        .image-label {
+        .section-title {
           display: block;
           font-size: 1.05rem;
           font-weight: 700;
@@ -330,6 +369,33 @@ export default function ProductForm({ product = null, onSuccess }) {
           padding-left: 30px;
         }
 
+        .stock-wrapper {
+          position: relative;
+        }
+
+        .stock-badge {
+          position: absolute;
+          right: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          padding: 4px 8px;
+          background: #dcfce7;
+          color: #166534;
+          border-radius: 6px;
+          font-size: 0.75rem;
+          font-weight: 700;
+        }
+
+        .stock-badge.low {
+          background: #fee2e2;
+          color: #991b1b;
+        }
+
+        .stock-badge.medium {
+          background: #fef3c7;
+          color: #92400e;
+        }
+
         .form-textarea {
           resize: vertical;
           min-height: 120px;
@@ -424,6 +490,12 @@ export default function ProductForm({ product = null, onSuccess }) {
         }
       `}</style>
 
+      {/* Collection Badge */}
+      <div className="collection-badge">
+        <span>🗄️</span>
+        <span>Saving to: <strong>{collectionName}</strong></span>
+      </div>
+
       {error && (
         <div className="alert alert-error">
           <span>⚠️</span>
@@ -440,14 +512,14 @@ export default function ProductForm({ product = null, onSuccess }) {
 
       {/* Image Upload Section */}
       <div className="image-section">
-        <label className="image-label">Product Image</label>
+        <label className="section-title">Product Image</label>
 
         <div className="image-container">
           {/* Image Preview */}
           <div className="image-preview">
             <div className="image-preview-box">
-              {imageUrl ? (
-                <img src={imageUrl} alt="Product preview" />
+              {formData.imageUrl ? (
+                <img src={formData.imageUrl} alt="Product preview" />
               ) : (
                 <div className="image-preview-placeholder">📸</div>
               )}
@@ -492,8 +564,8 @@ export default function ProductForm({ product = null, onSuccess }) {
           </label>
           <input
             type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            value={formData.name}
+            onChange={(e) => handleChange('name', e.target.value)}
             placeholder="e.g., Dark Chocolate Truffles"
             className="form-input"
             required
@@ -503,14 +575,14 @@ export default function ProductForm({ product = null, onSuccess }) {
         {/* Price */}
         <div className="form-group">
           <label className="form-label">
-            Price <span className="required">*</span>
+            Price ({currency}) <span className="required">*</span>
           </label>
           <div className="currency-wrapper">
-            <span className="currency-symbol">π </span>
+            <span className="currency-symbol">{currencySymbol}</span>
             <input
               type="number"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
+              value={formData.price}
+              onChange={(e) => handleChange('price', e.target.value)}
               placeholder="0.00"
               step="0.01"
               min="0"
@@ -527,13 +599,39 @@ export default function ProductForm({ product = null, onSuccess }) {
           </label>
           <input
             type="number"
-            value={piecesPerBox}
-            onChange={(e) => setPiecesPerBox(e.target.value)}
+            value={formData.piecesPerBox}
+            onChange={(e) => handleChange('piecesPerBox', e.target.value)}
             placeholder="e.g., 12"
             min="1"
             className="form-input"
             required
           />
+        </div>
+
+        {/* Available Stock - NEW FIELD */}
+        <div className="form-group">
+          <label className="form-label">
+            Available Stock <span className="required">*</span>
+          </label>
+          <div className="stock-wrapper">
+            <input
+              type="number"
+              value={formData.stock}
+              onChange={(e) => handleChange('stock', e.target.value)}
+              placeholder="e.g., 100"
+              min="0"
+              className="form-input"
+              required
+            />
+            <span className={`stock-badge ${
+              parseInt(formData.stock) === 0 ? 'low' : 
+              parseInt(formData.stock) < 10 ? 'medium' : ''
+            }`}>
+              {parseInt(formData.stock) === 0 ? 'Out of Stock' : 
+               parseInt(formData.stock) < 10 ? 'Low Stock' : 'In Stock'}
+            </span>
+          </div>
+          <p className="form-hint">Current inventory quantity available for sale</p>
         </div>
 
         {/* Flavors */}
@@ -543,8 +641,8 @@ export default function ProductForm({ product = null, onSuccess }) {
           </label>
           <input
             type="text"
-            value={flavors}
-            onChange={(e) => setFlavors(e.target.value)}
+            value={formData.flavors}
+            onChange={(e) => handleChange('flavors', e.target.value)}
             placeholder="e.g., Dark Chocolate, Mint, Raspberry"
             className="form-input"
             required
@@ -558,8 +656,8 @@ export default function ProductForm({ product = null, onSuccess }) {
             Description <span className="required">*</span>
           </label>
           <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            value={formData.description}
+            onChange={(e) => handleChange('description', e.target.value)}
             placeholder="Describe the product in detail..."
             className="form-textarea"
             required
@@ -569,9 +667,9 @@ export default function ProductForm({ product = null, onSuccess }) {
 
       {/* Submit Button */}
       <div className="form-actions">
-        <button type="submit" disabled={uploading} className="btn btn-primary">
-          <span>{uploading ? '⏳' : '💾'}</span>
-          {uploading ? 'Uploading...' : product ? 'Update Product' : 'Add Product'}
+        <button type="submit" disabled={uploading || isSubmitting} className="btn btn-primary">
+          <span>{uploading || isSubmitting ? '⏳' : '💾'}</span>
+          {uploading || isSubmitting ? 'Processing...' : product ? 'Update Product' : 'Add Product'}
         </button>
       </div>
     </form>

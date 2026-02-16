@@ -1,19 +1,24 @@
 // src/App.jsx
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
-import SignIn from './pages/SignUp'
-import SignUp from './pages/SignIn'     // 👈 new
-import Dashboard from './pages/Dashboard'
+import SignIn from './pages/SignIn'
+import DashboardRouter from './pages/DashboardRouter'
 
 function App() {
   return (
     <AuthProvider>
       <Routes>
-        <Route path="/signup" element={<SignUp />} />
+        {/* Root route - redirect to login if not authenticated, dashboard if authenticated */}
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        
+        {/* Login route */}
         <Route path="/login" element={<SignIn />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/" element={<SignUp />} /> {/* Default: show sign-up first */}
-        <Route path="*" element={<SignUp />} />
+        
+        {/* Dashboard route */}
+        <Route path="/dashboard" element={<DashboardRouter />} />
+        
+        {/* Catch all - redirect to login */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </AuthProvider>
   )

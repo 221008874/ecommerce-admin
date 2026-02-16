@@ -445,12 +445,7 @@ export default function SignIn() {
             </button>
           </form>
 
-          <div className="signin-footer">
-            <p className="signin-footer-text">Don't have an account?</p>
-            <Link to="/signup" className="signup-link">
-              Create one now
-            </Link>
-          </div>
+          
         </div>
       </div>
     </div>
