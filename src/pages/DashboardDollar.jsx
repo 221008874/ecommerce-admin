@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import ProductForm from '../components/ProductForm'
-import { useDashboardPI } from '../hooks/useDashboardPI'
+import { useDashboardDollar } from '../hooks/useDashboardDollar'
 import { themes } from '../config/themes'
 import { createStyles } from '../styles/dashboardStyles'
 
-export default function DashboardPI() {
-  const theme = themes.pi
-  const otherTheme = themes.egp
+export default function DashboardDollar() {
+  const theme = themes.dollar
+  const otherThemes = { pi: themes.pi, egp: themes.egp }
   
   const { currentUser } = useAuth()
   const navigate = useNavigate()
@@ -28,7 +28,7 @@ export default function DashboardPI() {
     dataLoaded,
     syncStatus,
     selectedDate,
-    otherCurrency,
+    otherCurrencies,
     collectionNames,
     filteredProducts,
     filteredOrders,
@@ -49,14 +49,15 @@ export default function DashboardPI() {
     handleSyncProduct,
     handleConfirmPayment,
     formatDate
-  } = useDashboardPI()
+  } = useDashboardDollar()
 
   const [hoveredProduct, setHoveredProduct] = useState(null)
   const [hoveredCard, setHoveredCard] = useState(null)
   const [hoveredButton, setHoveredButton] = useState(null)
   const [hoveredModalBtn, setHoveredModalBtn] = useState({})
+  const [hoveredSyncBtn, setHoveredSyncBtn] = useState(null)
 
-  const s = createStyles(theme, otherTheme, isMobile, isTablet)
+  const s = createStyles(theme, otherThemes.pi, isMobile, isTablet)
 
   useEffect(() => {
     if (!currentUser) {
@@ -67,7 +68,7 @@ export default function DashboardPI() {
   }, [currentUser])
 
   useEffect(() => {
-    const styleId = 'dashboard-styles-pi'
+    const styleId = 'dashboard-styles-dollar'
     if (!document.getElementById(styleId)) {
       const styleSheet = document.createElement('style')
       styleSheet.id = styleId
@@ -78,7 +79,7 @@ export default function DashboardPI() {
         @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-        @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(212, 160, 23, 0.4); } 50% { box-shadow: 0 0 0 10px rgba(212, 160, 23, 0); } }
+        @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4); } 50% { box-shadow: 0 0 0 10px rgba(5, 150, 105, 0); } }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
         .skeleton { background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
@@ -103,6 +104,32 @@ export default function DashboardPI() {
   }
 
   const onConfirmPayment = (order) => handleConfirmPayment(order, currentUser)
+
+  const getSyncButtonStyle = (targetCurrency, status) => {
+    const targetTheme = otherThemes[targetCurrency.toLowerCase()]
+    const isSyncing = status === `syncing-${targetCurrency}`
+    const isSynced = status === `synced-${targetCurrency}`
+    
+    return {
+      padding: isMobile ? '8px 12px' : '10px 16px',
+      background: isSynced ? '#059669' : isSyncing ? theme.gradient : targetTheme.gradient,
+      color: '#ffffff',
+      border: 'none',
+      borderRadius: 8,
+      fontWeight: 700,
+      fontSize: isMobile ? '0.75rem' : '0.85rem',
+      cursor: isSyncing ? 'wait' : 'pointer',
+      transition: 'all 0.3s ease',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      boxShadow: `0 2px 8px ${targetTheme.color}33`,
+      whiteSpace: 'nowrap',
+      opacity: isSyncing ? 0.7 : 1,
+      marginRight: 8,
+      marginBottom: isMobile ? 8 : 0
+    }
+  }
 
   return (
     <div style={s.dashboard}>
@@ -159,7 +186,7 @@ export default function DashboardPI() {
           <div style={s.actionsBar}>
             <div style={{...s.searchBox, maxWidth: '100%'}}>
               <span style={{position: 'absolute', left: isMobile ? 10 : 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.2rem'}}>🔍</span>
-              <input type="text" placeholder={activeTab === 'orders' ? "Search by Order ID, Payment ID..." : "Search confirmed payments..."} style={s.searchInput} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+              <input type="text" placeholder={activeTab === 'orders' ? "Search by Order ID, email, or product..." : "Search confirmed orders..."} style={s.searchInput} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}1a` }}
                 onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)' }} />
             </div>
@@ -196,17 +223,35 @@ export default function DashboardPI() {
                 onMouseEnter={(e) => { e.target.style.background = '#e2e8f0'; e.target.style.color = '#0f172a' }}
                 onMouseLeave={(e) => { e.target.style.background = '#f1f5f9'; e.target.style.color = '#64748b' }}>✕ Close</button>
             </div>
-            <ProductForm product={editingProduct} onSuccess={handleSuccess} currency="PI" collectionName={collectionNames.products} />
+            <ProductForm product={editingProduct} onSuccess={handleSuccess} currency="USD" collectionName={collectionNames.products} />
             
+            {/* Sync Buttons for Dollar products - can sync to both PI and EGP */}
             {editingProduct && (
               <div style={{marginTop: 24, paddingTop: 24, borderTop: '2px solid #f1f5f9'}}>
-                <button onClick={() => handleSyncProduct(editingProduct)} disabled={syncStatus === 'syncing'} style={s.syncButton(syncStatus)} className={syncStatus === 'syncing' ? 'sync-pulse' : ''}>
-                  {syncStatus === 'syncing' && '⏳ Syncing...'}
-                  {syncStatus === 'synced' && '✅ Synced!'}
-                  {syncStatus === 'error' && '❌ Error'}
-                  {!syncStatus && <>🔄 Sync to {otherCurrency} Store</>}
-                </button>
-                <p style={s.syncNote}>This will copy "{editingProduct.name}" to the <strong>{otherCurrency}</strong> products collection</p>
+                <p style={{fontSize: '0.9rem', color: '#64748b', marginBottom: 12, fontWeight: 600}}>Sync to other stores:</p>
+                <div style={{display: 'flex', flexWrap: 'wrap', gap: 8}}>
+                  {otherCurrencies.map(targetCurrency => (
+                    <button
+                      key={targetCurrency}
+                      onClick={() => handleSyncProduct(editingProduct, targetCurrency)}
+                      disabled={syncStatus?.startsWith('syncing')}
+                      style={getSyncButtonStyle(targetCurrency, syncStatus)}
+                      className={syncStatus === `syncing-${targetCurrency}` ? 'sync-pulse' : ''}
+                      onMouseEnter={() => setHoveredSyncBtn(targetCurrency)}
+                      onMouseLeave={() => setHoveredSyncBtn(null)}
+                    >
+                      {syncStatus === `syncing-${targetCurrency}` && '⏳ Syncing...'}
+                      {syncStatus === `synced-${targetCurrency}` && '✅ Synced!'}
+                      {syncStatus === 'error' && '❌ Error'}
+                      {!syncStatus?.includes(targetCurrency) && (
+                        <>🔄 Sync to {targetCurrency} Store</>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <p style={{...s.syncNote, borderLeftColor: theme.color, marginTop: 12}}>
+                  This will copy "{editingProduct.name}" with converted pricing to selected stores
+                </p>
               </div>
             )}
           </div>
@@ -241,7 +286,7 @@ export default function DashboardPI() {
                       <div key={p.id} style={s.productCard(hoveredProduct === p.id)} onMouseEnter={() => setHoveredProduct(p.id)} onMouseLeave={() => setHoveredProduct(null)}>
                         <div style={s.productImageContainer}>
                           {p.syncedFrom && (
-                            <div style={{ position: 'absolute', top: 12, right: 12, background: themes[p.syncedFrom.toLowerCase()]?.gradient || theme.gradient, color: '#ffffff', padding: '4px 8px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 700, zIndex: 10 }}>
+                            <div style={{ position: 'absolute', top: 12, right: 12, background: otherThemes[p.syncedFrom.toLowerCase()]?.gradient || theme.gradient, color: '#ffffff', padding: '4px 8px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 700, zIndex: 10 }}>
                               Synced from {p.syncedFrom}
                             </div>
                           )}
@@ -254,6 +299,7 @@ export default function DashboardPI() {
                             <span>📦 {p.piecesPerBox} pieces per box</span>
                             {p.flavors?.length > 0 && <span>🎨 {p.flavors.length} flavor{p.flavors.length !== 1 ? 's' : ''}</span>}
                             {p.stock !== undefined && <span style={{color: p.stock === 0 ? '#e11d48' : p.stock < 10 ? '#f59e0b' : '#059669', fontWeight: 600}}>📊 Stock: {p.stock}</span>}
+                            {p.originalPriceUSD && <span style={{color: '#059669', fontSize: '0.8rem'}}>💱 Originally ${p.originalPriceUSD}</span>}
                           </div>
                           <div style={s.productActions}>
                             <button onClick={() => handleEdit(p)} style={s.productBtn('edit', hoveredButton === `edit-${p.id}`)} onMouseEnter={() => setHoveredButton(`edit-${p.id}`)} onMouseLeave={() => setHoveredButton(null)}>Edit</button>
@@ -275,12 +321,12 @@ export default function DashboardPI() {
           </>
         )}
 
-        {/* Orders Section - PI specific (simpler, no customer column) */}
+        {/* Orders Section - Dollar specific with customer email */}
         {activeTab === 'orders' && (
           <>
             <div style={s.sectionHeader}>
-              <h2 style={s.sectionTitle}>🛒 Pending PI Orders<span style={s.sectionCount}>{filteredOrders.length}</span></h2>
-              <p style={s.sectionSubtitle}>Orders with completed payments awaiting confirmation for shipping</p>
+              <h2 style={s.sectionTitle}>🛒 Pending USD Orders<span style={s.sectionCount}>{filteredOrders.length}</span></h2>
+              <p style={s.sectionSubtitle}>Paid orders awaiting confirmation for shipping</p>
             </div>
 
             {filteredOrders.length > 0 ? (
@@ -289,6 +335,7 @@ export default function DashboardPI() {
                   <thead>
                     <tr>
                       <th style={s.tableHeader}>Order Details</th>
+                      <th style={s.tableHeader}>Customer</th>
                       <th style={s.tableHeader}>Items</th>
                       <th style={s.tableHeader}>Total</th>
                       <th style={s.tableHeader}>Date</th>
@@ -302,9 +349,18 @@ export default function DashboardPI() {
                           <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
                             <span style={s.orderId}>{order.orderId}</span>
                             {order.paymentId && <span style={s.paymentId}>Payment: {order.paymentId?.slice(0, 16)}...</span>}
-                            <span style={s.statusBadge(order.status)}>⏳ Pending</span>
+                            <span style={{...s.statusBadge(order.status), background: '#d1fae5', color: '#065f46'}}>💳 Paid</span>
                           </div>
                         </td>
+                        
+                        <td style={s.tableCell}>
+                          <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+                            <span style={{fontWeight: 600, color: '#0f172a'}}>{order.customerName}</span>
+                            <span style={{fontSize: '0.85rem', color: '#64748b'}}>✉️ {order.customerEmail}</span>
+                            {order.customerPhone && <span style={{fontSize: '0.8rem', color: '#94a3b8'}}>📞 {order.customerPhone}</span>}
+                          </div>
+                        </td>
+
                         <td style={{...s.tableCell, ...s.orderItems}}>
                           {order.items?.map((item, idx) => (
                             <div key={idx} style={s.orderItem}>
@@ -316,11 +372,14 @@ export default function DashboardPI() {
                             </div>
                           ))}
                         </td>
+                        
                         <td style={s.tableCell}>
                           <span style={s.orderTotal}>{theme.symbol} {order.totalPrice?.toFixed(2)}</span>
                           <span style={s.currencyBadge}>{order.currency}</span>
                         </td>
+                        
                         <td style={s.tableCell}>{formatDate(order.createdAt)}</td>
+                        
                         <td style={s.tableCell}>
                           <button onClick={() => setConfirmPaymentModal(order)} style={s.confirmBtn(hoveredButton === `confirm-${order.id}`)} onMouseEnter={() => setHoveredButton(`confirm-${order.id}`)} onMouseLeave={() => setHoveredButton(null)}>✓ Confirm</button>
                         </td>
@@ -332,18 +391,18 @@ export default function DashboardPI() {
             ) : (
               <div style={s.emptyState}>
                 <div style={s.emptyIcon}>📭</div>
-                <p style={s.emptyText}>{searchQuery ? 'No orders match your search' : 'No pending PI orders'}</p>
+                <p style={s.emptyText}>{searchQuery ? 'No orders match your search' : 'No pending USD orders'}</p>
               </div>
             )}
           </>
         )}
 
-        {/* Confirmed Payments Section - PI specific (simpler, no customer details) */}
+        {/* Confirmed Payments Section */}
         {activeTab === 'confirmed' && (
           <>
             <div style={s.sectionHeader}>
-              <h2 style={s.sectionTitle}>✅ Confirmed PI Orders<span style={s.sectionCount}>{filteredConfirmedPayments.length}</span></h2>
-              <p style={s.sectionSubtitle}>Pi Network payments confirmed and ready for shipping</p>
+              <h2 style={s.sectionTitle}>✅ Confirmed USD Orders<span style={s.sectionCount}>{filteredConfirmedPayments.length}</span></h2>
+              <p style={s.sectionSubtitle}>Paid orders confirmed and ready for shipping</p>
             </div>
 
             {filteredConfirmedPayments.length > 0 ? (
@@ -353,9 +412,40 @@ export default function DashboardPI() {
                     <div style={s.confirmedHeader}>
                       <div style={s.confirmedIds}>
                         <div style={s.confirmedOrderId}>{payment.orderId}</div>
-                        {payment.paymentId && <div style={s.confirmedPaymentId}>{theme.symbol} {payment.paymentId?.slice(0, 20)}...</div>}
+                        {payment.paymentMethod && <div style={{fontSize: '0.75rem', color: '#64748b', marginTop: 4}}>💳 {payment.paymentMethod}</div>}
                       </div>
                       <span style={s.confirmedDate}>✓ {formatDate(payment.confirmedAt)}</span>
+                    </div>
+
+                    {/* Customer Info */}
+                    <div style={{...s.confirmedSection, background: '#f8fafc', padding: 16, borderRadius: 8, marginBottom: 16}}>
+                      <div style={{...s.confirmedLabel, marginBottom: 12}}>Customer Details</div>
+                      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                          <span>👤</span>
+                          <span style={{fontWeight: 600}}>{payment.customerInfo?.customerName || payment.customerName}</span>
+                        </div>
+                        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                          <span>✉️</span>
+                          <span>{payment.customerInfo?.customerEmail || payment.customerEmail}</span>
+                        </div>
+                        {(payment.customerInfo?.customerPhone || payment.customerPhone) && (
+                          <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                            <span>📞</span>
+                            <span>{payment.customerInfo?.customerPhone || payment.customerPhone}</span>
+                          </div>
+                        )}
+                        {(payment.customerInfo?.shippingAddress || payment.shippingAddress) && (
+                          <div style={{display: 'flex', alignItems: 'flex-start', gap: 8}}>
+                            <span>📦</span>
+                            <span style={{fontSize: '0.9rem', lineHeight: 1.4}}>
+                              {typeof (payment.customerInfo?.shippingAddress || payment.shippingAddress) === 'object' 
+                                ? Object.values(payment.customerInfo?.shippingAddress || payment.shippingAddress).join(', ')
+                                : (payment.customerInfo?.shippingAddress || payment.shippingAddress)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div style={s.confirmedSection}>
@@ -394,7 +484,7 @@ export default function DashboardPI() {
             ) : (
               <div style={s.emptyState}>
                 <div style={s.emptyIcon}>📭</div>
-                <p style={s.emptyText}>No confirmed PI orders for {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                <p style={s.emptyText}>No confirmed USD orders for {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
                 <p style={{fontSize: '0.9rem', color: '#94a3b8', marginTop: 8}}>Try selecting a different date from the filter above</p>
               </div>
             )}
@@ -421,13 +511,13 @@ export default function DashboardPI() {
           </div>
         )}
 
-        {/* Confirm Payment Modal - PI specific (simpler, no customer details) */}
+        {/* Confirm Payment Modal */}
         {confirmPaymentModal && (
           <div style={s.modalOverlay} onClick={() => setConfirmPaymentModal(null)}>
             <div style={s.modal} onClick={(e) => e.stopPropagation()}>
               <div style={s.modalHeader}>
-                <h3 style={s.modalTitle}>✅ Confirm PI Order for Shipping</h3>
-                <p style={s.modalSubtitle}>Review order details before confirming payment for shipping</p>
+                <h3 style={s.modalTitle}>✅ Confirm USD Order for Shipping</h3>
+                <p style={s.modalSubtitle}>Review paid order before confirming for shipping</p>
               </div>
 
               <div style={s.modalSection}>
@@ -444,14 +534,34 @@ export default function DashboardPI() {
                     </div>
                   )}
                   <div>
+                    <div style={{fontSize: '0.85rem', color: '#64748b'}}>Customer Name</div>
+                    <div style={{fontWeight: 600}}>{confirmPaymentModal.customerName}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize: '0.85rem', color: '#64748b'}}>Email</div>
+                    <div>{confirmPaymentModal.customerEmail}</div>
+                  </div>
+                  <div>
                     <div style={{fontSize: '0.85rem', color: '#64748b'}}>Order Date</div>
                     <div>{formatDate(confirmPaymentModal.createdAt)}</div>
                   </div>
                   <div>
                     <div style={{fontSize: '0.85rem', color: '#64748b'}}>Status</div>
-                    <span style={s.statusBadge(confirmPaymentModal.status)}>{confirmPaymentModal.status}</span>
+                    <span style={{...s.statusBadge(confirmPaymentModal.status), background: '#d1fae5', color: '#065f46'}}>Paid</span>
                   </div>
                 </div>
+
+                {/* Shipping Address */}
+                {confirmPaymentModal.shippingAddress && (
+                  <div style={{marginTop: 16, padding: 12, background: '#f8fafc', borderRadius: 8}}>
+                    <div style={{fontSize: '0.85rem', color: '#64748b', marginBottom: 4}}>Shipping Address</div>
+                    <div style={{fontSize: '0.95rem', color: '#0f172a', fontWeight: 500}}>
+                      {typeof confirmPaymentModal.shippingAddress === 'object' 
+                        ? Object.values(confirmPaymentModal.shippingAddress).join(', ')
+                        : confirmPaymentModal.shippingAddress}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div style={s.modalSection}>

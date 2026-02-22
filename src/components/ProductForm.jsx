@@ -5,7 +5,6 @@ import { db } from '../services/firebase'
 import { uploadImage } from '../services/cloudinary'
 
 export default function ProductForm({ product = null, onSuccess, currency, collectionName }) {
-  // Match previous form data structure exactly
   const [formData, setFormData] = useState({
     name: product?.name || '',
     price: product?.price || '',
@@ -13,9 +12,9 @@ export default function ProductForm({ product = null, onSuccess, currency, colle
     description: product?.description || '',
     flavors: product?.flavors?.join(', ') || '',
     imageUrl: product?.imageUrl || '',
-    stock: product?.stock || 0  // New field for available stock
+    stock: product?.stock || 0
   })
-  
+
   const [imageFile, setImageFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -25,13 +24,10 @@ export default function ProductForm({ product = null, onSuccess, currency, colle
   const handleFileChange = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-    
-    // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
       setError('Image size must be less than 5MB')
       return
     }
-
     setError('')
     setUploading(true)
     try {
@@ -55,14 +51,13 @@ export default function ProductForm({ product = null, onSuccess, currency, colle
     e.preventDefault()
     setError('')
     setIsSubmitting(true)
-    
+
     if (!formData.name.trim() || !formData.description.trim()) {
       setError('Please fill in all required fields')
       setIsSubmitting(false)
       return
     }
 
-    // Build data object matching previous structure exactly
     const data = {
       name: formData.name.trim(),
       price: parseFloat(formData.price) || 0,
@@ -70,7 +65,7 @@ export default function ProductForm({ product = null, onSuccess, currency, colle
       flavors: formData.flavors.split(',').map(f => f.trim()).filter(Boolean),
       description: formData.description.trim(),
       imageUrl: formData.imageUrl,
-      stock: parseInt(formData.stock) || 0,  // Include stock in saved data
+      stock: parseInt(formData.stock) || 0,
       currency: currency,
       updatedAt: serverTimestamp()
     }
@@ -93,583 +88,405 @@ export default function ProductForm({ product = null, onSuccess, currency, colle
     }
   }
 
-  // Get currency symbol
-  const currencySymbol = currency === 'PI' ? 'π' : '£'
+  const currencySymbol = currency === 'PI' ? 'π' : currency === 'EGP' ? '£' : '$'
+  const stockVal = parseInt(formData.stock)
 
   return (
-    <form onSubmit={handleSubmit} className="product-form">
-      <style jsx>{`
-        .product-form {
+    <form onSubmit={handleSubmit} className="pf-form">
+      <style>{`
+        .pf-form {
           display: flex;
           flex-direction: column;
-          gap: 32px;
+          gap: 28px;
+          color: #e8e8f0;
         }
 
-        .collection-badge {
+        /* Collection badge */
+        .pf-badge {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          padding: 8px 16px;
-          background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-          border: 1px solid #cbd5e1;
+          padding: 7px 14px;
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.12);
           border-radius: 20px;
-          font-size: 0.85rem;
+          font-size: 0.82rem;
           font-weight: 600;
-          color: #475569;
-          margin-bottom: 8px;
-          animation: slideDown 0.3s ease-out;
+          color: rgba(255,255,255,0.65);
         }
+        .pf-badge strong { color: rgba(255,255,255,0.90); }
 
-        .alert {
-          padding: 16px;
-          border-radius: 12px;
-          font-size: 0.95rem;
-          animation: slideDown 0.3s ease-out;
+        /* Alerts */
+        .pf-alert {
+          padding: 14px 16px;
+          border-radius: 10px;
+          font-size: 0.9rem;
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 10px;
+          animation: pf-slide 0.3s ease-out;
+        }
+        .pf-alert-error {
+          background: rgba(239,68,68,0.12);
+          border: 1px solid rgba(239,68,68,0.30);
+          color: #fca5a5;
+        }
+        .pf-alert-success {
+          background: rgba(16,185,129,0.12);
+          border: 1px solid rgba(16,185,129,0.30);
+          color: #6ee7b7;
+        }
+        @keyframes pf-slide {
+          from { opacity:0; transform: translateY(-8px); }
+          to   { opacity:1; transform: translateY(0); }
         }
 
-        .alert-error {
-          background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
-          border: 1px solid #fca5a5;
-          color: #991b1b;
-        }
-
-        .alert-success {
-          background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
-          border: 1px solid #86efac;
-          color: #166534;
-        }
-
-        @keyframes slideDown {
-          from {
-            opacity: 0;
-            transform: translateY(-12px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        /* Image Upload Section */
-        .image-section {
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
-        }
-
-        .section-title {
-          display: block;
-          font-size: 1.05rem;
+        /* Image section */
+        .pf-image-section { display: flex; flex-direction: column; gap: 16px; }
+        .pf-section-label {
+          font-size: 0.82rem;
           font-weight: 700;
-          color: #0f172a;
-          margin-bottom: 4px;
+          color: rgba(255,255,255,0.55);
+          text-transform: uppercase;
+          letter-spacing: 1px;
         }
+        .pf-image-row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 
-        .image-container {
-          display: flex;
-          gap: 28px;
-          align-items: flex-start;
-        }
-
-        .image-preview {
-          flex-shrink: 0;
-        }
-
-        .image-preview-box {
-          width: 140px;
-          height: 140px;
+        .pf-preview-box {
+          width: 130px;
+          height: 130px;
           border-radius: 12px;
           overflow: hidden;
-          border: 2px solid #e2e8f0;
-          background: #f8fafc;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.05);
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.3s ease;
+          flex-shrink: 0;
         }
+        .pf-preview-box img { width:100%; height:100%; object-fit:cover; }
+        .pf-preview-placeholder { font-size: 3rem; opacity: 0.4; }
 
-        .image-preview-box:hover {
-          border-color: #cbd5e1;
-          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-        }
+        .pf-upload-controls { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 180px; }
 
-        .image-preview-box img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-
-        .image-preview-placeholder {
-          font-size: 3.5rem;
-          animation: float 3s ease-in-out infinite;
-        }
-
-        @keyframes float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-8px); }
-        }
-
-        .image-controls {
-          flex: 1;
-        }
-
-        .file-input-wrapper {
-          position: relative;
-          margin-bottom: 16px;
-        }
-
-        .file-input {
-          position: absolute;
-          width: 1px;
-          height: 1px;
-          padding: 0;
-          margin: -1px;
-          overflow: hidden;
-          clip: rect(0, 0, 0, 0);
-          white-space: nowrap;
-          border: 0;
-        }
-
-        .file-label {
+        .pf-file-input { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
+        .pf-file-label {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          padding: 12px 20px;
-          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-          color: #ffffff;
-          border: none;
+          padding: 10px 18px;
+          background: rgba(255,255,255,0.08);
+          border: 1px solid rgba(255,255,255,0.16);
           border-radius: 8px;
           font-weight: 700;
-          font-size: 0.95rem;
+          font-size: 0.88rem;
+          color: rgba(255,255,255,0.85);
           cursor: pointer;
-          transition: all 0.3s ease;
-          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.2);
+          transition: all 0.2s ease;
+          width: fit-content;
+        }
+        .pf-file-label:hover {
+          background: rgba(255,255,255,0.13);
+          border-color: rgba(255,255,255,0.28);
+          color: #fff;
         }
 
-        .file-label:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.3);
-        }
-
-        .file-label:active {
-          transform: translateY(0);
-        }
-
-        .upload-status {
-          padding: 12px 16px;
-          background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-          border: 1px solid #93c5fd;
-          border-radius: 8px;
-          color: #1e40af;
-          font-size: 0.9rem;
+        .pf-uploading {
           display: inline-flex;
           align-items: center;
-          gap: 12px;
-          animation: slideDown 0.3s ease-out;
-        }
-
-        .spinner {
-          width: 14px;
-          height: 14px;
-          border: 2px solid #1e40af;
-          border-top-color: transparent;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-
-        .image-hint {
+          gap: 10px;
+          padding: 10px 14px;
+          background: rgba(59,130,246,0.12);
+          border: 1px solid rgba(59,130,246,0.28);
+          border-radius: 8px;
+          color: #93c5fd;
           font-size: 0.85rem;
-          color: #64748b;
-          margin-top: 12px;
-          line-height: 1.4;
         }
+        .pf-spinner {
+          width: 13px; height: 13px;
+          border: 2px solid rgba(147,197,253,0.35);
+          border-top-color: #93c5fd;
+          border-radius: 50%;
+          animation: pf-spin 0.7s linear infinite;
+          flex-shrink: 0;
+        }
+        @keyframes pf-spin { to { transform: rotate(360deg); } }
 
-        /* Form Fields */
-        .form-grid {
+        .pf-hint {
+          font-size: 0.78rem;
+          color: rgba(255,255,255,0.45);
+          line-height: 1.5;
+        }
+        .pf-hint strong { color: rgba(255,255,255,0.65); }
+
+        /* Grid */
+        .pf-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-          gap: 24px;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+          gap: 20px;
         }
+        .pf-group { display: flex; flex-direction: column; gap: 7px; }
+        .pf-group-full { grid-column: 1 / -1; }
 
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-
-        .form-label {
-          font-size: 0.95rem;
+        .pf-label {
+          font-size: 0.82rem;
           font-weight: 700;
-          color: #0f172a;
+          color: rgba(255,255,255,0.70);
           display: flex;
           align-items: center;
           gap: 4px;
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
         }
+        .pf-required { color: #f87171; }
 
-        .required {
-          color: #e11d48;
-        }
-
-        .form-input,
-        .form-textarea {
-          padding: 12px 14px;
-          border: 2px solid #e2e8f0;
-          border-radius: 8px;
-          font-size: 1rem;
-          color: #0f172a;
-          background: #ffffff;
-          font-family: inherit;
-          transition: all 0.3s ease;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-        }
-
-        .form-input:focus,
-        .form-textarea:focus {
-          outline: none;
-          border-color: #0f172a;
-          box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.1);
-          transform: translateY(-1px);
-        }
-
-        .form-input::placeholder,
-        .form-textarea::placeholder {
-          color: #94a3b8;
-        }
-
-        .form-hint {
-          font-size: 0.85rem;
-          color: #64748b;
-          margin-top: 4px;
-          line-height: 1.4;
-        }
-
-        .currency-wrapper {
-          position: relative;
-        }
-
-        .currency-symbol {
+        .pf-input-wrap { position: relative; }
+        .pf-prefix {
           position: absolute;
-          left: 14px;
+          left: 12px;
           top: 50%;
           transform: translateY(-50%);
-          color: #64748b;
+          color: rgba(255,255,255,0.50);
           font-weight: 600;
-          font-size: 1rem;
+          pointer-events: none;
+          font-size: 0.95rem;
+        }
+
+        .pf-input,
+        .pf-textarea {
+          width: 100%;
+          padding: 11px 14px;
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 8px;
+          font-size: 0.92rem;
+          color: #f0f0f8;
+          font-family: inherit;
+          transition: border-color 0.2s, box-shadow 0.2s;
+          outline: none;
+        }
+        .pf-input::placeholder,
+        .pf-textarea::placeholder { color: rgba(255,255,255,0.28); }
+        .pf-input:focus,
+        .pf-textarea:focus {
+          border-color: rgba(255,255,255,0.30);
+          box-shadow: 0 0 0 3px rgba(255,255,255,0.05);
+          background: rgba(255,255,255,0.08);
+        }
+        .pf-input-prefix { padding-left: 30px; }
+
+        .pf-textarea {
+          resize: vertical;
+          min-height: 110px;
+        }
+
+        /* Stock badge overlay */
+        .pf-stock-badge {
+          position: absolute;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          padding: 3px 9px;
+          border-radius: 20px;
+          font-size: 0.7rem;
+          font-weight: 700;
+          letter-spacing: 0.4px;
           pointer-events: none;
         }
+        .pf-stock-ok   { background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.25); }
+        .pf-stock-low  { background: rgba(245,158,11,0.15);  color: #fcd34d; border: 1px solid rgba(245,158,11,0.25); }
+        .pf-stock-zero { background: rgba(239,68,68,0.15);   color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
 
-        .currency-wrapper .form-input {
-          padding-left: 30px;
+        .pf-field-hint {
+          font-size: 0.76rem;
+          color: rgba(255,255,255,0.42);
+          margin-top: 2px;
         }
 
-        .stock-wrapper {
-          position: relative;
-        }
-
-        .stock-badge {
-          position: absolute;
-          right: 14px;
-          top: 50%;
-          transform: translateY(-50%);
-          padding: 4px 8px;
-          background: #dcfce7;
-          color: #166534;
-          border-radius: 6px;
-          font-size: 0.75rem;
+        /* Actions */
+        .pf-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+        .pf-submit {
+          padding: 12px 30px;
+          background: rgba(255,255,255,0.10);
+          border: 1px solid rgba(255,255,255,0.18);
+          border-radius: 9px;
           font-weight: 700;
-        }
-
-        .stock-badge.low {
-          background: #fee2e2;
-          color: #991b1b;
-        }
-
-        .stock-badge.medium {
-          background: #fef3c7;
-          color: #92400e;
-        }
-
-        .form-textarea {
-          resize: vertical;
-          min-height: 120px;
-        }
-
-        /* Full Width Description */
-        .description-section {
-          grid-column: 1 / -1;
-        }
-
-        /* Form Actions */
-        .form-actions {
-          display: flex;
-          gap: 12px;
-          justify-content: flex-end;
-          margin-top: 16px;
-        }
-
-        .btn {
-          padding: 12px 28px;
-          border: none;
-          border-radius: 8px;
-          font-weight: 700;
-          font-size: 0.95rem;
+          font-size: 0.92rem;
+          color: #ffffff;
           cursor: pointer;
-          transition: all 0.3s ease;
+          transition: all 0.2s ease;
           display: inline-flex;
           align-items: center;
           gap: 8px;
+          letter-spacing: 0.2px;
         }
-
-        .btn-primary {
-          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-          color: #ffffff;
-          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.2);
+        .pf-submit:hover:not(:disabled) {
+          background: rgba(255,255,255,0.16);
+          border-color: rgba(255,255,255,0.28);
+          transform: translateY(-1px);
         }
+        .pf-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .btn-primary:hover:not(:disabled) {
-          transform: translateY(-2px);
-          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.3);
-        }
-
-        .btn-primary:active:not(:disabled) {
-          transform: translateY(0);
-        }
-
-        .btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        /* Number Input Styling */
         input[type="number"]::-webkit-outer-spin-button,
-        input[type="number"]::-webkit-inner-spin-button {
-          -webkit-appearance: none;
-          margin: 0;
-        }
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+        input[type="number"] { -moz-appearance: textfield; }
 
-        input[type="number"] {
-          -moz-appearance: textfield;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-          .product-form {
-            gap: 24px;
-          }
-
-          .image-container {
-            flex-direction: column;
-            gap: 20px;
-          }
-
-          .image-preview-box {
-            width: 100%;
-            max-width: 140px;
-          }
-
-          .form-grid {
-            grid-template-columns: 1fr;
-            gap: 20px;
-          }
-
-          .form-actions {
-            flex-direction: column-reverse;
-          }
-
-          .btn {
-            width: 100%;
-            justify-content: center;
-          }
+        @media (max-width: 600px) {
+          .pf-image-row { flex-direction: column; }
+          .pf-preview-box { width: 100%; max-width: 130px; }
+          .pf-grid { grid-template-columns: 1fr; }
+          .pf-actions { flex-direction: column; }
+          .pf-submit { width: 100%; justify-content: center; }
         }
       `}</style>
 
-      {/* Collection Badge */}
-      <div className="collection-badge">
-        <span>🗄️</span>
-        <span>Saving to: <strong>{collectionName}</strong></span>
+      {/* Collection badge */}
+      <div className="pf-badge">
+        🗄️ Saving to: <strong>{collectionName}</strong>
       </div>
 
-      {error && (
-        <div className="alert alert-error">
-          <span>⚠️</span>
-          <span>{error}</span>
-        </div>
-      )}
+      {error   && <div className="pf-alert pf-alert-error">  ⚠️ {error}  </div>}
+      {success && <div className="pf-alert pf-alert-success"> ✓ {success} </div>}
 
-      {success && (
-        <div className="alert alert-success">
-          <span>✓</span>
-          <span>{success}</span>
-        </div>
-      )}
-
-      {/* Image Upload Section */}
-      <div className="image-section">
-        <label className="section-title">Product Image</label>
-
-        <div className="image-container">
-          {/* Image Preview */}
-          <div className="image-preview">
-            <div className="image-preview-box">
-              {formData.imageUrl ? (
-                <img src={formData.imageUrl} alt="Product preview" />
-              ) : (
-                <div className="image-preview-placeholder">📸</div>
-              )}
-            </div>
+      {/* Image upload */}
+      <div className="pf-image-section">
+        <span className="pf-section-label">Product Image</span>
+        <div className="pf-image-row">
+          <div className="pf-preview-box">
+            {formData.imageUrl
+              ? <img src={formData.imageUrl} alt="Preview" />
+              : <div className="pf-preview-placeholder">📸</div>}
           </div>
-
-          {/* Upload Controls */}
-          <div className="image-controls">
-            <div className="file-input-wrapper">
+          <div className="pf-upload-controls">
+            <div style={{ position: 'relative' }}>
               <input
                 type="file"
                 accept="image/*"
                 onChange={handleFileChange}
-                id="image-upload"
-                className="file-input"
+                id="pf-img-upload"
+                className="pf-file-input"
                 disabled={uploading}
               />
-              <label htmlFor="image-upload" className="file-label">
-                <span>📁</span>
-                {uploading ? 'Uploading...' : 'Choose Image'}
+              <label htmlFor="pf-img-upload" className="pf-file-label">
+                📁 {uploading ? 'Uploading…' : 'Choose Image'}
               </label>
             </div>
-
-            {uploading && <div className="upload-status">
-              <div className="spinner"></div>
-              Uploading image...
-            </div>}
-
-            <p className="image-hint">
-              <strong>Recommended:</strong> Square format (1:1), at least 600×600px, under 5MB
+            {uploading && (
+              <div className="pf-uploading">
+                <div className="pf-spinner" />
+                Uploading image…
+              </div>
+            )}
+            <p className="pf-hint">
+              <strong>Recommended:</strong> Square 1:1, min 600×600 px, under 5 MB
             </p>
           </div>
         </div>
       </div>
 
-      {/* Form Fields */}
-      <div className="form-grid">
-        {/* Product Name */}
-        <div className="form-group">
-          <label className="form-label">
-            Product Name <span className="required">*</span>
-          </label>
+      {/* Fields */}
+      <div className="pf-grid">
+
+        {/* Name */}
+        <div className="pf-group">
+          <label className="pf-label">Product Name <span className="pf-required">*</span></label>
           <input
             type="text"
             value={formData.name}
-            onChange={(e) => handleChange('name', e.target.value)}
+            onChange={e => handleChange('name', e.target.value)}
             placeholder="e.g., Dark Chocolate Truffles"
-            className="form-input"
+            className="pf-input"
             required
           />
         </div>
 
         {/* Price */}
-        <div className="form-group">
-          <label className="form-label">
-            Price ({currency}) <span className="required">*</span>
-          </label>
-          <div className="currency-wrapper">
-            <span className="currency-symbol">{currencySymbol}</span>
+        <div className="pf-group">
+          <label className="pf-label">Price ({currency}) <span className="pf-required">*</span></label>
+          <div className="pf-input-wrap">
+            <span className="pf-prefix">{currencySymbol}</span>
             <input
               type="number"
               value={formData.price}
-              onChange={(e) => handleChange('price', e.target.value)}
+              onChange={e => handleChange('price', e.target.value)}
               placeholder="0.00"
               step="0.01"
               min="0"
-              className="form-input"
+              className="pf-input pf-input-prefix"
               required
             />
           </div>
         </div>
 
-        {/* Pieces per Box */}
-        <div className="form-group">
-          <label className="form-label">
-            Pieces per Box <span className="required">*</span>
-          </label>
+        {/* Pieces per box */}
+        <div className="pf-group">
+          <label className="pf-label">Pieces per Box <span className="pf-required">*</span></label>
           <input
             type="number"
             value={formData.piecesPerBox}
-            onChange={(e) => handleChange('piecesPerBox', e.target.value)}
+            onChange={e => handleChange('piecesPerBox', e.target.value)}
             placeholder="e.g., 12"
             min="1"
-            className="form-input"
+            className="pf-input"
             required
           />
         </div>
 
-        {/* Available Stock - NEW FIELD */}
-        <div className="form-group">
-          <label className="form-label">
-            Available Stock <span className="required">*</span>
-          </label>
-          <div className="stock-wrapper">
+        {/* Stock */}
+        <div className="pf-group">
+          <label className="pf-label">Available Stock <span className="pf-required">*</span></label>
+          <div className="pf-input-wrap">
             <input
               type="number"
               value={formData.stock}
-              onChange={(e) => handleChange('stock', e.target.value)}
+              onChange={e => handleChange('stock', e.target.value)}
               placeholder="e.g., 100"
               min="0"
-              className="form-input"
+              className="pf-input"
+              style={{ paddingRight: 100 }}
               required
             />
-            <span className={`stock-badge ${
-              parseInt(formData.stock) === 0 ? 'low' : 
-              parseInt(formData.stock) < 10 ? 'medium' : ''
+            <span className={`pf-stock-badge ${
+              stockVal === 0 ? 'pf-stock-zero' : stockVal < 10 ? 'pf-stock-low' : 'pf-stock-ok'
             }`}>
-              {parseInt(formData.stock) === 0 ? 'Out of Stock' : 
-               parseInt(formData.stock) < 10 ? 'Low Stock' : 'In Stock'}
+              {stockVal === 0 ? 'Out of Stock' : stockVal < 10 ? 'Low Stock' : 'In Stock'}
             </span>
           </div>
-          <p className="form-hint">Current inventory quantity available for sale</p>
+          <p className="pf-field-hint">Current inventory available for sale</p>
         </div>
 
         {/* Flavors */}
-        <div className="form-group">
-          <label className="form-label">
-            Flavors <span className="required">*</span>
-          </label>
+        <div className="pf-group">
+          <label className="pf-label">Flavors <span className="pf-required">*</span></label>
           <input
             type="text"
             value={formData.flavors}
-            onChange={(e) => handleChange('flavors', e.target.value)}
+            onChange={e => handleChange('flavors', e.target.value)}
             placeholder="e.g., Dark Chocolate, Mint, Raspberry"
-            className="form-input"
+            className="pf-input"
             required
           />
-          <p className="form-hint">Separate flavors with commas</p>
+          <p className="pf-field-hint">Separate with commas</p>
         </div>
 
-        {/* Description - Full Width */}
-        <div className="form-group description-section">
-          <label className="form-label">
-            Description <span className="required">*</span>
-          </label>
+        {/* Description */}
+        <div className="pf-group pf-group-full">
+          <label className="pf-label">Description <span className="pf-required">*</span></label>
           <textarea
             value={formData.description}
-            onChange={(e) => handleChange('description', e.target.value)}
-            placeholder="Describe the product in detail..."
-            className="form-textarea"
+            onChange={e => handleChange('description', e.target.value)}
+            placeholder="Describe the product in detail…"
+            className="pf-textarea"
             required
           />
         </div>
+
       </div>
 
-      {/* Submit Button */}
-      <div className="form-actions">
-        <button type="submit" disabled={uploading || isSubmitting} className="btn btn-primary">
-          <span>{uploading || isSubmitting ? '⏳' : '💾'}</span>
-          {uploading || isSubmitting ? 'Processing...' : product ? 'Update Product' : 'Add Product'}
+      {/* Submit */}
+      <div className="pf-actions">
+        <button type="submit" disabled={uploading || isSubmitting} className="pf-submit">
+          {uploading || isSubmitting ? '⏳ Processing…' : product ? '💾 Update Product' : '💾 Add Product'}
         </button>
       </div>
     </form>
