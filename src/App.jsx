@@ -6,7 +6,7 @@ import { AuthProvider } from './context/AuthContext'
 import SignIn from './pages/SignIn'
 
 // Admin Dashboard
-import DashboardRouter from './pages/Dashboardrouter'
+import DashboardRouter from './pages/DashboardRouter'
 
 function App() {
   return (
