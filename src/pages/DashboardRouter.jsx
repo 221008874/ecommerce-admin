@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
-import DashboardPI from './DashboardPI'
+import DashboardPI from './DashboardPi'
 import DashboardEGP from './DashboardEGP'
 import DashboardDollar from './DashboardDollar'
 
