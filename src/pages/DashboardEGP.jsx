@@ -5,6 +5,52 @@ import ProductForm from '../components/ProductForm'
 import { useDashboardEGP } from '../hooks/useDashboardEGP'
 import { themes } from '../config/themes'
 import { createStyles } from '../styles/dashboardStyles'
+import { db } from '../services/firebase'
+import { 
+  collection, 
+  addDoc, 
+  getDocs, 
+  deleteDoc, 
+  doc, 
+  updateDoc, 
+  query, 
+  orderBy, 
+  Timestamp,
+  setDoc,
+  getDoc,
+  writeBatch
+} from 'firebase/firestore'
+
+// FIXED: Complete list of Egypt's 27 governorates with fixed IDs
+const EGYPT_GOVERNORATES = [
+  { id: 'cairo', name: 'Cairo', nameAr: 'القاهرة', defaultCost: 50 },
+  { id: 'giza', name: 'Giza', nameAr: 'الجيزة', defaultCost: 50 },
+  { id: 'alexandria', name: 'Alexandria', nameAr: 'الإسكندرية', defaultCost: 60 },
+  { id: 'qalyubia', name: 'Qalyubia', nameAr: 'القليوبية', defaultCost: 55 },
+  { id: 'monufia', name: 'Monufia', nameAr: 'المنوفية', defaultCost: 60 },
+  { id: 'gharbia', name: 'Gharbia', nameAr: 'الغربية', defaultCost: 65 },
+  { id: 'dakahlia', name: 'Dakahlia', nameAr: 'الدقهلية', defaultCost: 65 },
+  { id: 'sharkia', name: 'Sharqia', nameAr: 'الشرقية', defaultCost: 65 },
+  { id: 'beheira', name: 'Beheira', nameAr: 'البحيرة', defaultCost: 70 },
+  { id: 'kafr_sheikh', name: 'Kafr El Sheikh', nameAr: 'كفر الشيخ', defaultCost: 75 },
+  { id: 'damietta', name: 'Damietta', nameAr: 'دمياط', defaultCost: 70 },
+  { id: 'port_said', name: 'Port Said', nameAr: 'بورسعيد', defaultCost: 80 },
+  { id: 'ismailia', name: 'Ismailia', nameAr: 'الإسماعيلية', defaultCost: 75 },
+  { id: 'suez', name: 'Suez', nameAr: 'السويس', defaultCost: 75 },
+  { id: 'matrouh', name: 'Matrouh', nameAr: 'مطروح', defaultCost: 100 },
+  { id: 'north_sinai', name: 'North Sinai', nameAr: 'شمال سيناء', defaultCost: 120 },
+  { id: 'south_sinai', name: 'South Sinai', nameAr: 'جنوب سيناء', defaultCost: 130 },
+  { id: 'faiyum', name: 'Faiyum', nameAr: 'الفيوم', defaultCost: 70 },
+  { id: 'beni_suef', name: 'Beni Suef', nameAr: 'بني سويف', defaultCost: 75 },
+  { id: 'minya', name: 'Minya', nameAr: 'المنيا', defaultCost: 80 },
+  { id: 'asyut', name: 'Asyut', nameAr: 'أسيوط', defaultCost: 85 },
+  { id: 'sohag', name: 'Sohag', nameAr: 'سوهاج', defaultCost: 90 },
+  { id: 'qena', name: 'Qena', nameAr: 'قنا', defaultCost: 95 },
+  { id: 'luxor', name: 'Luxor', nameAr: 'الأقصر', defaultCost: 100 },
+  { id: 'aswan', name: 'Aswan', nameAr: 'أسوان', defaultCost: 110 },
+  { id: 'red_sea', name: 'Red Sea', nameAr: 'البحر الأحمر', defaultCost: 120 },
+  { id: 'new_valley', name: 'New Valley', nameAr: 'الوادي الجديد', defaultCost: 130 }
+]
 
 export default function DashboardEGP() {
   const theme = themes.egp
@@ -51,12 +97,302 @@ export default function DashboardEGP() {
     formatDate
   } = useDashboardEGP()
 
+  // FIXED: Simplified operations state - only storing shipping costs and minimum order
+  const [operations, setOperations] = useState({
+    governorateCosts: {}, // { governorateId: cost }
+    minimumOrderAmount: 0
+  })
+  const [editingGovernorate, setEditingGovernorate] = useState(null)
+  const [operationsLoading, setOperationsLoading] = useState(false)
+
   const [hoveredProduct, setHoveredProduct] = useState(null)
   const [hoveredCard, setHoveredCard] = useState(null)
   const [hoveredButton, setHoveredButton] = useState(null)
   const [hoveredModalBtn, setHoveredModalBtn] = useState({})
 
+  // Coupon states
+  const [coupons, setCoupons] = useState([])
+  const [showCouponForm, setShowCouponForm] = useState(false)
+  const [editingCoupon, setEditingCoupon] = useState(null)
+  const [deleteCouponConfirm, setDeleteCouponConfirm] = useState(null)
+  const [couponSearchQuery, setCouponSearchQuery] = useState('')
+  const [couponFormData, setCouponFormData] = useState({
+    amount: '',
+    duration: '',
+    quantity: 1
+  })
+  const [isGeneratingCoupons, setIsGeneratingCoupons] = useState(false)
+  const [couponError, setCouponError] = useState(null)
+
   const s = createStyles(theme, otherTheme, isMobile, isTablet)
+
+  // FIXED: Load operations - initialize governorates if not exist
+  const loadOperations = async () => {
+    try {
+      // Load governorate shipping costs
+      const costsRef = collection(db, 'egp_governorate_costs')
+      const costsSnap = await getDocs(costsRef)
+      
+      let governorateCosts = {}
+      
+      if (costsSnap.empty) {
+        // Initialize default costs for all governorates
+        const batch = writeBatch(db)
+        
+        for (const gov of EGYPT_GOVERNORATES) {
+          const ref = doc(db, 'egp_governorate_costs', gov.id)
+          batch.set(ref, {
+            cost: gov.defaultCost,
+            name: gov.name,
+            nameAr: gov.nameAr,
+            updatedAt: Timestamp.now()
+          })
+          governorateCosts[gov.id] = gov.defaultCost
+        }
+        
+        await batch.commit()
+      } else {
+        costsSnap.docs.forEach(doc => {
+          governorateCosts[doc.id] = doc.data().cost
+        })
+        
+        // Add any missing governorates (in case new ones were added to the list)
+        const batch = writeBatch(db)
+        let hasMissing = false
+        
+        for (const gov of EGYPT_GOVERNORATES) {
+          if (!(gov.id in governorateCosts)) {
+            const ref = doc(db, 'egp_governorate_costs', gov.id)
+            batch.set(ref, {
+              cost: gov.defaultCost,
+              name: gov.name,
+              nameAr: gov.nameAr,
+              updatedAt: Timestamp.now()
+            })
+            governorateCosts[gov.id] = gov.defaultCost
+            hasMissing = true
+          }
+        }
+        
+        if (hasMissing) await batch.commit()
+      }
+
+      // Load minimum order amount
+      const settingsRef = doc(db, 'egp_settings', 'general')
+      const settingsSnap = await getDoc(settingsRef)
+      const minOrderAmount = settingsSnap.exists() ? settingsSnap.data().minimumOrderAmount || 0 : 0
+
+      setOperations({
+        governorateCosts,
+        minimumOrderAmount: minOrderAmount
+      })
+    } catch (error) {
+      console.error('Error loading operations:', error)
+    }
+  }
+
+  // FIXED: Update governorate shipping cost only
+  const handleUpdateGovernorateCost = async (governorateId, newCost) => {
+    try {
+      const cost = parseFloat(newCost) || 0
+      if (cost < 0) throw new Error('Cost cannot be negative')
+      
+      setOperationsLoading(true)
+      
+      await updateDoc(doc(db, 'egp_governorate_costs', governorateId), {
+        cost: cost,
+        updatedAt: Timestamp.now()
+      })
+      
+      setOperations(prev => ({
+        ...prev,
+        governorateCosts: {
+          ...prev.governorateCosts,
+          [governorateId]: cost
+        }
+      }))
+      
+      setEditingGovernorate(null)
+    } catch (error) {
+      console.error('Error updating cost:', error)
+      alert('Failed to update shipping cost')
+    } finally {
+      setOperationsLoading(false)
+    }
+  }
+
+  // Update minimum order amount
+  const handleUpdateMinOrder = async (newAmount) => {
+    try {
+      const amount = parseFloat(newAmount) || 0
+      await setDoc(doc(db, 'egp_settings', 'general'), {
+        minimumOrderAmount: amount,
+        updatedAt: Timestamp.now()
+      }, { merge: true })
+      
+      setOperations(prev => ({
+        ...prev,
+        minimumOrderAmount: amount
+      }))
+    } catch (error) {
+      console.error('Error updating min order:', error)
+      alert('Failed to update minimum order amount')
+    }
+  }
+
+  // Generate unique coupon code
+  const generateCouponCode = () => {
+    const prefix = 'EGP'
+    const timestamp = Date.now().toString(36).toUpperCase()
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase()
+    return `${prefix}-${timestamp}-${random}`
+  }
+
+  // Load coupons from Firestore
+  const loadCoupons = async () => {
+    try {
+      const couponsRef = collection(db, 'egp_coupons')
+      const q = query(couponsRef, orderBy('createdAt', 'desc'))
+      const snapshot = await getDocs(q)
+      const couponsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate?.() || new Date(),
+        expiresAt: doc.data().expiresAt?.toDate?.() || null
+      }))
+      setCoupons(couponsData)
+    } catch (error) {
+      console.error('Error loading coupons:', error)
+    }
+  }
+
+  // Generate multiple coupons
+  const handleGenerateCoupons = async (e) => {
+    e.preventDefault()
+    setCouponError(null)
+    setIsGeneratingCoupons(true)
+
+    try {
+      const { amount, duration, quantity } = couponFormData
+      const numQuantity = parseInt(quantity)
+      const numAmount = parseFloat(amount)
+      const numDuration = parseInt(duration)
+
+      if (!numAmount || numAmount <= 0) throw new Error('Invalid amount')
+      if (!numDuration || numDuration <= 0) throw new Error('Invalid duration')
+      if (!numQuantity || numQuantity <= 0 || numQuantity > 100) throw new Error('Quantity must be between 1 and 100')
+
+      const expiresAt = new Date()
+      expiresAt.setDate(expiresAt.getDate() + numDuration)
+
+      const generatedCoupons = []
+
+      for (let i = 0; i < numQuantity; i++) {
+        const couponCode = generateCouponCode()
+        const couponData = {
+          code: couponCode,
+          amount: numAmount,
+          currency: 'EGP',
+          duration: numDuration,
+          createdAt: Timestamp.now(),
+          expiresAt: Timestamp.fromDate(expiresAt),
+          isActive: true,
+          usedCount: 0,
+          maxUses: 1,
+          createdBy: currentUser?.email || 'admin'
+        }
+
+        const docRef = await addDoc(collection(db, 'egp_coupons'), couponData)
+        generatedCoupons.push({
+          id: docRef.id,
+          ...couponData,
+          createdAt: new Date(),
+          expiresAt: expiresAt
+        })
+      }
+
+      setCoupons(prev => [...generatedCoupons, ...prev])
+      setShowCouponForm(false)
+      setCouponFormData({ amount: '', duration: '', quantity: 1 })
+      alert(`Successfully generated ${numQuantity} coupon(s)`)
+    } catch (error) {
+      setCouponError(error.message)
+    } finally {
+      setIsGeneratingCoupons(false)
+    }
+  }
+
+  // Delete coupon
+  const handleDeleteCoupon = async (couponId) => {
+    try {
+      await deleteDoc(doc(db, 'egp_coupons', couponId))
+      setCoupons(prev => prev.filter(c => c.id !== couponId))
+      setDeleteCouponConfirm(null)
+    } catch (error) {
+      console.error('Error deleting coupon:', error)
+      alert('Failed to delete coupon')
+    }
+  }
+
+  // Toggle coupon active status
+  const handleToggleCouponStatus = async (coupon) => {
+    try {
+      const newStatus = !coupon.isActive
+      await updateDoc(doc(db, 'egp_coupons', coupon.id), {
+        isActive: newStatus
+      })
+      setCoupons(prev => prev.map(c => 
+        c.id === coupon.id ? { ...c, isActive: newStatus } : c
+      ))
+    } catch (error) {
+      console.error('Error updating coupon:', error)
+    }
+  }
+
+  // Edit coupon
+  const handleEditCoupon = async (e) => {
+    e.preventDefault()
+    try {
+      const { amount, duration } = editingCoupon
+      const numAmount = parseFloat(amount)
+      const numDuration = parseInt(duration)
+
+      if (!numAmount || numAmount <= 0) throw new Error('Invalid amount')
+      
+      const updates = {
+        amount: numAmount,
+        updatedAt: Timestamp.now()
+      }
+
+      if (numDuration && numDuration !== editingCoupon.duration) {
+        const expiresAt = new Date()
+        expiresAt.setDate(expiresAt.getDate() + numDuration)
+        updates.duration = numDuration
+        updates.expiresAt = Timestamp.fromDate(expiresAt)
+      }
+
+      await updateDoc(doc(db, 'egp_coupons', editingCoupon.id), updates)
+      
+      setCoupons(prev => prev.map(c => 
+        c.id === editingCoupon.id ? { ...c, ...updates, updatedAt: new Date() } : c
+      ))
+      setEditingCoupon(null)
+    } catch (error) {
+      alert(error.message)
+    }
+  }
+
+  // Filter coupons
+  const filteredCoupons = coupons.filter(coupon => 
+    coupon.code.toLowerCase().includes(couponSearchQuery.toLowerCase()) ||
+    coupon.amount.toString().includes(couponSearchQuery)
+  )
+
+  // Check if coupon is expired
+  const isCouponExpired = (coupon) => {
+    if (!coupon.expiresAt) return false
+    return new Date(coupon.expiresAt) < new Date()
+  }
 
   useEffect(() => {
     if (!currentUser) {
@@ -64,7 +400,9 @@ export default function DashboardEGP() {
       return
     }
     loadAllData()
-  }, [currentUser])
+    loadCoupons()
+    loadOperations()
+  }, [currentUser, navigate])
 
   useEffect(() => {
     const styleId = 'dashboard-styles-egp'
@@ -104,6 +442,15 @@ export default function DashboardEGP() {
 
   const onConfirmPayment = (order) => handleConfirmPayment(order, currentUser)
 
+  // FIXED: Updated tabs array
+  const navigationTabs = [
+    { id: 'products', icon: '📦', label: 'Products', count: products.length },
+    { id: 'orders', icon: '🛒', label: 'Orders', count: filteredOrders.length },
+    { id: 'confirmed', icon: '✅', label: 'Confirmed', count: filteredConfirmedPayments.length },
+    { id: 'coupons', icon: '🎫', label: 'Coupons', count: coupons.length },
+    { id: 'operations', icon: '⚙️', label: 'Operations', count: 27 } // Fixed count
+  ]
+
   return (
     <div style={s.dashboard}>
       {/* Header */}
@@ -128,11 +475,7 @@ export default function DashboardEGP() {
       <main style={s.main}>
         {/* Navigation Tabs */}
         <div style={s.navTabs}>
-          {[
-            { id: 'products', icon: '📦', label: 'Products', count: products.length },
-            { id: 'orders', icon: '🛒', label: 'Orders', count: filteredOrders.length },
-            { id: 'confirmed', icon: '✅', label: 'Confirmed', count: filteredConfirmedPayments.length }
-          ].map(tab => (
+          {navigationTabs.map(tab => (
             <button key={tab.id} style={s.navTab(activeTab === tab.id)} onClick={() => setActiveTab(tab.id)}>
               {tab.icon} {tab.label}
               <span style={s.tabBadge(activeTab === tab.id)}>{tab.count}</span>
@@ -166,6 +509,37 @@ export default function DashboardEGP() {
           </div>
         )}
 
+        {/* Coupons Actions Bar */}
+        {activeTab === 'coupons' && (
+          <div style={s.actionsBar}>
+            <button 
+              onClick={() => {
+                setShowCouponForm(!showCouponForm)
+                setEditingCoupon(null)
+                setCouponFormData({ amount: '', duration: '', quantity: 1 })
+              }} 
+              style={{...s.addBtn, background: showCouponForm ? '#e11d48' : theme.gradient}}
+              onMouseEnter={() => setHoveredButton('coupon-add')} 
+              onMouseLeave={() => setHoveredButton(null)}
+            >
+              <span>{showCouponForm ? '✕' : '🎫'}</span>
+              {showCouponForm ? 'Cancel' : 'Generate Coupons'}
+            </button>
+            <div style={s.searchBox}>
+              <span style={{position: 'absolute', left: isMobile ? 10 : 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.2rem'}}>🔍</span>
+              <input 
+                type="text" 
+                placeholder="Search coupons by code or amount..." 
+                style={s.searchInput} 
+                value={couponSearchQuery} 
+                onChange={(e) => setCouponSearchQuery(e.target.value)}
+                onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}1a` }}
+                onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)' }} 
+              />
+            </div>
+          </div>
+        )}
+
         {/* Date Filter for Confirmed Orders */}
         {activeTab === 'confirmed' && (
           <div style={s.dateFilterContainer}>
@@ -183,6 +557,280 @@ export default function DashboardEGP() {
                   {btn.label}
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Coupon Generation Form */}
+        {activeTab === 'coupons' && showCouponForm && (
+          <div style={s.formSection}>
+            <div style={s.formSectionHeader}>
+              <h3 style={s.formSectionTitle}>🎫 Generate New Coupons</h3>
+              <button onClick={() => setShowCouponForm(false)} style={s.closeBtn}>✕ Close</button>
+            </div>
+
+            <form onSubmit={handleGenerateCoupons} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: 16 }}>
+
+                {/* Amount */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.65)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                    Discount Amount (EGP) *
+                  </label>
+                  <input
+                    type="number" min="1" step="0.01" required
+                    value={couponFormData.amount}
+                    onChange={(e) => setCouponFormData(prev => ({ ...prev, amount: e.target.value }))}
+                    placeholder="e.g., 50"
+                    style={{
+                      width: '100%', padding: '11px 14px',
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, fontSize: '0.92rem',
+                      color: '#f0f0f8', outline: 'none', transition: 'all 0.2s'
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}22` }}
+                    onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.boxShadow = 'none' }}
+                  />
+                </div>
+
+                {/* Duration */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.65)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                    Validity (Days) *
+                  </label>
+                  <input
+                    type="number" min="1" max="365" required
+                    value={couponFormData.duration}
+                    onChange={(e) => setCouponFormData(prev => ({ ...prev, duration: e.target.value }))}
+                    placeholder="e.g., 30"
+                    style={{
+                      width: '100%', padding: '11px 14px',
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, fontSize: '0.92rem',
+                      color: '#f0f0f8', outline: 'none', transition: 'all 0.2s'
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}22` }}
+                    onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.boxShadow = 'none' }}
+                  />
+                </div>
+
+                {/* Quantity */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.65)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                    Quantity (1–100) *
+                  </label>
+                  <input
+                    type="number" min="1" max="100" required
+                    value={couponFormData.quantity}
+                    onChange={(e) => setCouponFormData(prev => ({ ...prev, quantity: parseInt(e.target.value) || 1 }))}
+                    placeholder="e.g., 10"
+                    style={{
+                      width: '100%', padding: '11px 14px',
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, fontSize: '0.92rem',
+                      color: '#f0f0f8', outline: 'none', transition: 'all 0.2s'
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}22` }}
+                    onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.boxShadow = 'none' }}
+                  />
+                </div>
+              </div>
+
+              {couponError && (
+                <div style={{
+                  padding: '12px 16px',
+                  background: 'rgba(239,68,68,0.12)',
+                  border: '1px solid rgba(239,68,68,0.30)',
+                  borderRadius: 8, color: '#fca5a5', fontSize: '0.88rem'
+                }}>
+                  ⚠️ {couponError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCouponForm(false)}
+                  style={{
+                    padding: '10px 20px',
+                    border: '1px solid rgba(255,255,255,0.14)',
+                    borderRadius: 9, background: 'rgba(255,255,255,0.07)',
+                    color: 'rgba(255,255,255,0.65)', fontWeight: 600,
+                    cursor: 'pointer', transition: 'all 0.2s', fontSize: '0.9rem'
+                  }}
+                  onMouseEnter={(e) => { e.target.style.background = 'rgba(255,255,255,0.12)'; e.target.style.color = '#fff' }}
+                  onMouseLeave={(e) => { e.target.style.background = 'rgba(255,255,255,0.07)'; e.target.style.color = 'rgba(255,255,255,0.65)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isGeneratingCoupons}
+                  style={{
+                    padding: '10px 26px',
+                    border: 'none', borderRadius: 9,
+                    background: theme.color,
+                    color: '#ffffff', fontWeight: 700,
+                    cursor: isGeneratingCoupons ? 'not-allowed' : 'pointer',
+                    opacity: isGeneratingCoupons ? 0.6 : 1,
+                    transition: 'all 0.2s', fontSize: '0.9rem',
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    boxShadow: `0 4px 16px ${theme.color}44`
+                  }}
+                >
+                  {isGeneratingCoupons
+                    ? <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span> Generating...</>
+                    : <>🎫 Generate {couponFormData.quantity > 1 ? `${couponFormData.quantity} Coupons` : 'Coupon'}</>
+                  }
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+       {/* Edit Coupon Modal */}
+        {editingCoupon && (
+          <div style={s.modalOverlay} onClick={() => setEditingCoupon(null)}>
+            <div style={{...s.modal, maxWidth: 500}} onClick={(e) => e.stopPropagation()}>
+              <div style={s.modalHeader}>
+                <h3 style={s.modalTitle}>✏️ Edit Coupon</h3>
+                <p style={s.modalSubtitle}>Update coupon details</p>
+              </div>
+
+              <form onSubmit={handleEditCoupon} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+                {/* Code display */}
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.72rem', fontWeight: 700, color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                    Coupon Code
+                  </label>
+                  <div style={{
+                    padding: '11px 14px',
+                    background: 'rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(255,255,255,0.10)',
+                    borderRadius: 8,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: '1rem',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    letterSpacing: '1.5px'
+                  }}>
+                    {editingCoupon.code}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  {/* Amount */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                      Amount (EGP) *
+                    </label>
+                    <input
+                      type="number" min="1" step="0.01" required
+                      value={editingCoupon.amount}
+                      onChange={(e) => setEditingCoupon(prev => ({ ...prev, amount: e.target.value }))}
+                      style={{
+                        width: '100%', padding: '11px 14px',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 8, fontSize: '0.92rem',
+                        color: '#f0f0f8', outline: 'none', transition: 'all 0.2s'
+                      }}
+                      onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}22` }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.boxShadow = 'none' }}
+                    />
+                  </div>
+
+                  {/* Duration */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                      Extend Duration (Days)
+                    </label>
+                    <input
+                      type="number" min="1"
+                      value={editingCoupon.duration}
+                      onChange={(e) => setEditingCoupon(prev => ({ ...prev, duration: parseInt(e.target.value) || prev.duration }))}
+                      style={{
+                        width: '100%', padding: '11px 14px',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 8, fontSize: '0.92rem',
+                        color: '#f0f0f8', outline: 'none', transition: 'all 0.2s'
+                      }}
+                      onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}22` }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.boxShadow = 'none' }}
+                    />
+                    <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>
+                      Expires: {editingCoupon.expiresAt?.toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={s.modalActions}>
+                  <button type="button" onClick={() => setEditingCoupon(null)}
+                    style={s.modalBtn('cancel', hoveredModalBtn.cancel)}
+                    onMouseEnter={() => setHoveredModalBtn({...hoveredModalBtn, cancel: true})}
+                    onMouseLeave={() => setHoveredModalBtn({...hoveredModalBtn, cancel: false})}>
+                    Cancel
+                  </button>
+                  <button type="submit"
+                    style={s.modalBtn('confirm', hoveredModalBtn.confirm)}
+                    onMouseEnter={() => setHoveredModalBtn({...hoveredModalBtn, confirm: true})}
+                    onMouseLeave={() => setHoveredModalBtn({...hoveredModalBtn, confirm: false})}>
+                    💾 Save Changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Coupon Confirmation */}
+        {deleteCouponConfirm && (
+          <div style={s.modalOverlay} onClick={() => setDeleteCouponConfirm(null)}>
+            <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+              <div style={s.modalHeader}>
+                <h3 style={s.modalTitle}>🗑️ Delete Coupon</h3>
+                <p style={s.modalSubtitle}>Are you sure you want to delete this coupon?</p>
+              </div>
+              <div style={s.modalSection}>
+                <p style={s.deleteModalText}>
+                  You are about to delete:
+                  <span style={{...s.deleteModalProductName, fontFamily: 'monospace', letterSpacing: '1px'}}>
+                    🎫 {deleteCouponConfirm.code}
+                  </span>
+                </p>
+                <p style={{fontSize: '0.85rem', color: '#94a3b8'}}>
+                  Amount: {theme.symbol} {deleteCouponConfirm.amount} | 
+                  Status: {deleteCouponConfirm.isActive ? 'Active' : 'Inactive'}
+                </p>
+                {deleteCouponConfirm.usedCount > 0 && (
+                  <p style={{fontSize: '0.85rem', color: '#f59e0b', marginTop: 8}}>
+                    ⚠️ This coupon has been used {deleteCouponConfirm.usedCount} time(s)
+                  </p>
+                )}
+              </div>
+              <div style={s.modalActions}>
+                <button 
+                  onClick={() => setDeleteCouponConfirm(null)} 
+                  style={s.modalBtn('cancel', hoveredModalBtn.cancel)} 
+                  onMouseEnter={() => setHoveredModalBtn({...hoveredModalBtn, cancel: true})} 
+                  onMouseLeave={() => setHoveredModalBtn({...hoveredModalBtn, cancel: false})}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleDeleteCoupon(deleteCouponConfirm.id)} 
+                  style={{...s.modalBtn('confirm', hoveredModalBtn.confirm), background: hoveredModalBtn.confirm ? '#dc2626' : '#e11d48', borderColor: '#e11d48'}} 
+                  onMouseEnter={() => setHoveredModalBtn({...hoveredModalBtn, confirm: true})} 
+                  onMouseLeave={() => setHoveredModalBtn({...hoveredModalBtn, confirm: false})}
+                >
+                  🗑️ Delete Coupon
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -211,6 +859,300 @@ export default function DashboardEGP() {
             )}
           </div>
         )}
+
+        {/* FIXED: Operations Section - Governorates Management */}
+{activeTab === 'operations' && (
+  <>
+    <div style={s.sectionHeader}>
+      <h2 style={s.sectionTitle}>⚙️ Operations Management</h2>
+      <p style={s.sectionSubtitle}>Configure shipping costs for Egypt's 27 governorates</p>
+    </div>
+
+    {/* Minimum Order Amount Card */}
+    <div style={{
+      background: 'rgba(255,255,255,0.04)',
+      borderWidth: '1px',
+      borderStyle: 'solid',
+      borderColor: 'rgba(255,255,255,0.08)',
+      borderRadius: 14,
+      padding: '20px 24px',
+      marginBottom: 24
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: isMobile ? 'wrap' : 'nowrap',
+        gap: 16
+      }}>
+        <div>
+          <h3 style={{
+            margin: '0 0 6px 0',
+            fontSize: '1rem',
+            fontWeight: 700,
+            color: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          }}>
+            💰 Minimum Order Amount
+          </h3>
+          <p style={{
+            margin: 0,
+            fontSize: '0.8rem',
+            color: 'rgba(255,255,255,0.50)'
+          }}>
+            Orders below this amount will not be accepted
+          </p>
+        </div>
+        
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexShrink: 0
+        }}>
+          <div style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
+            <span style={{
+              position: 'absolute',
+              left: 14,
+              color: theme.color,
+              fontWeight: 700,
+              fontSize: '1rem'
+            }}>
+              {theme.symbol}
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={operations.minimumOrderAmount}
+              onChange={(e) => handleUpdateMinOrder(e.target.value)}
+              style={{
+                width: 140,
+                padding: '10px 14px 10px 34px',
+                background: 'rgba(255,255,255,0.06)',
+                borderWidth: '1px',
+                borderStyle: 'solid',
+                borderColor: 'rgba(255,255,255,0.12)',
+                borderRadius: 10,
+                fontSize: '1rem',
+                fontWeight: 700,
+                color: '#ffffff',
+                outline: 'none',
+                transition: 'all 0.2s'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = theme.color
+                e.target.style.boxShadow = `0 0 0 3px ${theme.color}22`
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = 'rgba(255,255,255,0.12)'
+                e.target.style.boxShadow = 'none'
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Governorates Grid */}
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: isMobile ? '1fr' : isTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)',
+      gap: 12
+    }}>
+      {EGYPT_GOVERNORATES.map((gov) => {
+        const currentCost = operations.governorateCosts[gov.id] ?? gov.defaultCost
+        const isEditing = editingGovernorate === gov.id
+        const isHov = hoveredCard === gov.id
+        
+        return (
+          <div
+            key={gov.id}
+            style={{
+              background: isHov ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.04)',
+              borderWidth: '1px',
+              borderStyle: 'solid',
+              borderColor: isHov ? theme.color + '55' : 'rgba(255,255,255,0.09)',
+              borderRadius: 12,
+              padding: '16px 20px',
+              transition: 'all 0.2s ease',
+              transform: isHov ? 'translateY(-2px)' : 'translateY(0)',
+              boxShadow: isHov ? `0 6px 24px rgba(0,0,0,0.3)` : 'none'
+            }}
+            onMouseEnter={() => setHoveredCard(gov.id)}
+            onMouseLeave={() => setHoveredCard(null)}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 12
+            }}>
+              <div>
+                <h4 style={{
+                  margin: 0,
+                  fontSize: '0.95rem',
+                  fontWeight: 700,
+                  color: '#ffffff'
+                }}>
+                  {gov.name}
+                </h4>
+                <span style={{
+                  fontSize: '0.8rem',
+                  color: 'rgba(255,255,255,0.50)',
+                  fontFamily: 'system-ui'
+                }}>
+                  {gov.nameAr}
+                </span>
+              </div>
+              
+              {!isEditing && (
+                <button
+                  onClick={() => setEditingGovernorate(gov.id)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    borderWidth: '1px',
+                    borderStyle: 'solid',
+                    borderColor: 'rgba(255,255,255,0.14)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: 'rgba(255,255,255,0.75)',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.background = 'rgba(255,255,255,0.12)'
+                    e.target.style.color = '#ffffff'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = 'rgba(255,255,255,0.06)'
+                    e.target.style.color = 'rgba(255,255,255,0.75)'
+                  }}
+                >
+                  ✏️ Edit
+                </button>
+              )}
+            </div>
+
+            {isEditing ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const input = e.target.elements.cost
+                  handleUpdateGovernorateCost(gov.id, input.value)
+                }}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center'
+                }}
+              >
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <span style={{
+                    position: 'absolute',
+                    left: 12,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: theme.color,
+                    fontWeight: 700
+                  }}>
+                    {theme.symbol}
+                  </span>
+                  <input
+                    name="cost"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    defaultValue={currentCost}
+                    autoFocus
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px 10px 32px',
+                      background: 'rgba(255,255,255,0.08)',
+                      borderWidth: '1px',
+                      borderStyle: 'solid',
+                      borderColor: theme.color + '50',
+                      borderRadius: 8,
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      color: '#ffffff',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={operationsLoading}
+                  style={{
+                    padding: '10px 16px',
+                    border: 'none',
+                    borderRadius: 8,
+                    background: theme.color,
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: operationsLoading ? 'not-allowed' : 'pointer',
+                    opacity: operationsLoading ? 0.6 : 1,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {operationsLoading ? '⟳' : '💾'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingGovernorate(null)}
+                  style={{
+                    padding: '10px 12px',
+                    borderWidth: '1px',
+                    borderStyle: 'solid',
+                    borderColor: 'rgba(255,255,255,0.14)',
+                    borderRadius: 8,
+                    background: 'rgba(255,255,255,0.06)',
+                    color: 'rgba(255,255,255,0.65)',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  ✕
+                </button>
+              </form>
+            ) : (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8
+              }}>
+                <span style={{
+                  fontSize: '1.3rem',
+                  fontWeight: 800,
+                  color: theme.color
+                }}>
+                  {theme.symbol} {currentCost.toFixed(2)}
+                </span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  color: 'rgba(255,255,255,0.40)',
+                  textTransform: 'uppercase'
+                }}>
+                  Shipping
+                </span>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  </>
+)}
 
         {/* Products Section */}
         {activeTab === 'products' && (
@@ -271,6 +1213,218 @@ export default function DashboardEGP() {
                   </div>
                 )}
               </>
+            )}
+          </>
+        )}
+
+        {/* Coupons Section */}
+        {activeTab === 'coupons' && (
+          <>
+            <div style={s.sectionHeader}>
+              <h2 style={s.sectionTitle}>🎫 Coupons<span style={s.sectionCount}>{filteredCoupons.length}</span></h2>
+              <p style={s.sectionSubtitle}>Manage discount coupons for EGP store</p>
+            </div>
+
+            {filteredCoupons.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {filteredCoupons.map(coupon => {
+                  const expired = isCouponExpired(coupon)
+                  const isHov = hoveredCard === coupon.id
+                  return (
+                    <div
+                      key={coupon.id}
+                      style={{
+                        background: isHov ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${isHov ? theme.color + '55' : 'rgba(255,255,255,0.09)'}`,
+                        borderLeft: `3px solid ${expired ? '#f59e0b' : !coupon.isActive ? '#ef4444' : theme.color}`,
+                        borderRadius: 12,
+                        padding: isMobile ? '14px 16px' : '16px 20px',
+                        display: 'flex',
+                        flexDirection: isMobile ? 'column' : 'row',
+                        alignItems: isMobile ? 'stretch' : 'center',
+                        gap: 16,
+                        transition: 'all 0.2s ease',
+                        opacity: (!coupon.isActive || expired) ? 0.65 : 1,
+                        transform: isHov ? 'translateY(-2px)' : 'translateY(0)',
+                        boxShadow: isHov ? `0 6px 24px rgba(0,0,0,0.3)` : 'none'
+                      }}
+                      onMouseEnter={() => setHoveredCard(coupon.id)}
+                      onMouseLeave={() => setHoveredCard(null)}
+                    >
+                      {/* Coupon Code + Meta */}
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        
+                        {/* Code + Status badges */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontFamily: "'JetBrains Mono', monospace",
+                            fontSize: isMobile ? '0.95rem' : '1.05rem',
+                            fontWeight: 700,
+                            color: '#ffffff',
+                            letterSpacing: '1.5px',
+                            background: 'rgba(255,255,255,0.08)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            padding: '5px 12px',
+                            borderRadius: 7
+                          }}>
+                            {coupon.code}
+                          </span>
+
+                          {coupon.isActive && !expired && (
+                            <span style={{
+                              background: 'rgba(16,185,129,0.15)',
+                              color: '#34d399',
+                              border: '1px solid rgba(16,185,129,0.25)',
+                              padding: '2px 9px', borderRadius: 20,
+                              fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'
+                            }}>● Active</span>
+                          )}
+                          {!coupon.isActive && (
+                            <span style={{
+                              background: 'rgba(239,68,68,0.15)',
+                              color: '#f87171',
+                              border: '1px solid rgba(239,68,68,0.25)',
+                              padding: '2px 9px', borderRadius: 20,
+                              fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'
+                            }}>● Inactive</span>
+                          )}
+                          {expired && (
+                            <span style={{
+                              background: 'rgba(245,158,11,0.15)',
+                              color: '#fbbf24',
+                              border: '1px solid rgba(245,158,11,0.25)',
+                              padding: '2px 9px', borderRadius: 20,
+                              fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'
+                            }}>● Expired</span>
+                          )}
+                        </div>
+
+                        {/* Meta row */}
+                        <div style={{
+                          display: 'flex', gap: 14, flexWrap: 'wrap',
+                          fontSize: '0.76rem', color: 'rgba(255,255,255,0.50)'
+                        }}>
+                          <span>📅 Created: {coupon.createdAt?.toLocaleDateString('en-GB')}</span>
+                          <span>⏳ Expires: {coupon.expiresAt?.toLocaleDateString('en-GB')}</span>
+                          <span>🔁 Used: {coupon.usedCount || 0}×</span>
+                        </div>
+                      </div>
+
+                      {/* Amount */}
+                      <div style={{
+                        textAlign: isMobile ? 'left' : 'center',
+                        minWidth: 110,
+                        padding: isMobile ? '8px 0 0' : '0',
+                        borderTop: isMobile ? '1px solid rgba(255,255,255,0.07)' : 'none'
+                      }}>
+                        <div style={{
+                          fontSize: isMobile ? '1.4rem' : '1.6rem',
+                          fontWeight: 800,
+                          color: theme.color,
+                          letterSpacing: '-0.5px'
+                        }}>
+                          {theme.symbol} {coupon.amount?.toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.40)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          Discount
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                        {/* Toggle */}
+                        <button
+                          onClick={() => handleToggleCouponStatus(coupon)}
+                          style={{
+                            padding: '7px 13px',
+                            borderRadius: 8,
+                            border: `1px solid ${coupon.isActive ? 'rgba(255,255,255,0.14)' : theme.color + '55'}`,
+                            background: coupon.isActive ? 'rgba(255,255,255,0.06)' : `${theme.color}18`,
+                            color: coupon.isActive ? 'rgba(255,255,255,0.65)' : theme.color,
+                            fontSize: '0.80rem', fontWeight: 700,
+                            cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap'
+                          }}
+                          onMouseEnter={(e) => { e.target.style.transform = 'translateY(-1px)' }}
+                          onMouseLeave={(e) => { e.target.style.transform = 'translateY(0)' }}
+                        >
+                          {coupon.isActive ? '⏸ Deactivate' : '▶ Activate'}
+                        </button>
+
+                        {/* Edit */}
+                        <button
+                          onClick={() => setEditingCoupon(coupon)}
+                          style={{
+                            padding: '7px 13px',
+                            borderRadius: 8,
+                            border: '1px solid rgba(255,255,255,0.14)',
+                            background: 'rgba(255,255,255,0.06)',
+                            color: 'rgba(255,255,255,0.75)',
+                            fontSize: '0.80rem', fontWeight: 700,
+                            cursor: 'pointer', transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.target.style.background = 'rgba(255,255,255,0.12)'
+                            e.target.style.color = '#ffffff'
+                            e.target.style.transform = 'translateY(-1px)'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.target.style.background = 'rgba(255,255,255,0.06)'
+                            e.target.style.color = 'rgba(255,255,255,0.75)'
+                            e.target.style.transform = 'translateY(0)'
+                          }}
+                        >
+                          ✏️ Edit
+                        </button>
+
+                        {/* Delete */}
+                        <button
+                          onClick={() => setDeleteCouponConfirm(coupon)}
+                          style={{
+                            padding: '7px 13px',
+                            borderRadius: 8,
+                            border: '1px solid rgba(239,68,68,0.25)',
+                            background: 'rgba(239,68,68,0.10)',
+                            color: '#f87171',
+                            fontSize: '0.80rem', fontWeight: 700,
+                            cursor: 'pointer', transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.target.style.background = '#ef4444'
+                            e.target.style.borderColor = '#ef4444'
+                            e.target.style.color = '#ffffff'
+                            e.target.style.transform = 'translateY(-1px)'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.target.style.background = 'rgba(239,68,68,0.10)'
+                            e.target.style.borderColor = 'rgba(239,68,68,0.25)'
+                            e.target.style.color = '#f87171'
+                            e.target.style.transform = 'translateY(0)'
+                          }}
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div style={s.emptyState}>
+                <div style={s.emptyIcon}>🎫</div>
+                <p style={s.emptyText}>
+                  {couponSearchQuery ? 'No coupons match your search' : 'No coupons generated yet'}
+                </p>
+                {!couponSearchQuery && (
+                  <button
+                    onClick={() => setShowCouponForm(true)}
+                    style={s.emptyButton(hoveredButton === 'empty-coupon')}
+                    onMouseEnter={() => setHoveredButton('empty-coupon')}
+                    onMouseLeave={() => setHoveredButton(null)}
+                  >
+                    <span>🎫</span>Generate First Coupon
+                  </button>
+                )}
+              </div>
             )}
           </>
         )}
@@ -385,104 +1539,103 @@ export default function DashboardEGP() {
 
                     {/* Customer Info for EGP */}
                     <div style={{
-  background: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: 12,
-  overflow: 'hidden',
-  marginBottom: 16
-}}>
-  {/* Header row */}
-  <div style={{
-    padding: '8px 14px',
-    background: 'rgba(255,255,255,0.04)',
-    borderBottom: '1px solid rgba(255,255,255,0.07)',
-    fontSize: '0.68rem',
-    fontWeight: 700,
-    color: 'rgba(255,255,255,0.40)',
-    textTransform: 'uppercase',
-    letterSpacing: '1px'
-  }}>
-    Customer Details
-  </div>
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: 12,
+                      overflow: 'hidden',
+                      marginBottom: 16
+                    }}>
+                      {/* Header row */}
+                      <div style={{
+                        padding: '8px 14px',
+                        background: 'rgba(255,255,255,0.04)',
+                        borderBottom: '1px solid rgba(255,255,255,0.07)',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        color: 'rgba(255,255,255,0.40)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '1px'
+                      }}>
+                        Customer Details
+                      </div>
 
-  <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-    {/* Name */}
-    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'nowrap' }}>
-      <div style={{
-        width: 28, height: 28, borderRadius: 7, flexShrink: 0,
-        background: `${theme.color}18`,
-        border: `1px solid ${theme.color}30`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '0.8rem'
-      }}>👤</div>
-      <span style={{
-        fontWeight: 700, fontSize: '0.88rem', color: '#ffffff',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-      }}>
-        {payment.customerInfo?.customerName || payment.customerName}
-      </span>
-    </div>
+                        {/* Name */}
+                        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'nowrap' }}>
+                          <div style={{
+                            width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                            background: `${theme.color}18`,
+                            border: `1px solid ${theme.color}30`,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '0.8rem'
+                          }}>👤</div>
+                          <span style={{
+                            fontWeight: 700, fontSize: '0.88rem', color: '#ffffff',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                          }}>
+                            {payment.customerInfo?.customerName || payment.customerName}
+                          </span>
+                        </div>
 
-    {/* Phone */}
-    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'nowrap' }}>
-      <div style={{
-        width: 28, height: 28, borderRadius: 7, flexShrink: 0,
-        background: 'rgba(16,185,129,0.12)',
-        border: '1px solid rgba(16,185,129,0.22)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '0.8rem'
-      }}>📞</div>
-      <span style={{
-        fontSize: '0.82rem', color: 'rgba(255,255,255,0.80)',
-        fontFamily: "'JetBrains Mono', monospace",
-        letterSpacing: '0.3px', whiteSpace: 'nowrap'
-      }}>
-        {payment.customerInfo?.customerPhone || payment.customerPhone}
-      </span>
-    </div>
+                        {/* Phone */}
+                        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'nowrap' }}>
+                          <div style={{
+                            width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                            background: 'rgba(16,185,129,0.12)',
+                            border: '1px solid rgba(16,185,129,0.22)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '0.8rem'
+                          }}>📞</div>
+                          <span style={{
+                            fontSize: '0.82rem', color: 'rgba(255,255,255,0.80)',
+                            fontFamily: "'JetBrains Mono', monospace",
+                            letterSpacing: '0.3px', whiteSpace: 'nowrap'
+                          }}>
+                            {payment.customerInfo?.customerPhone || payment.customerPhone}
+                          </span>
+                        </div>
 
-    {/* Address */}
-    {(payment.customerInfo?.customerAddress || payment.customerAddress) && (
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'nowrap' }}>
-        <div style={{
-          width: 28, height: 28, borderRadius: 7, flexShrink: 0,
-          background: 'rgba(245,158,11,0.12)',
-          border: '1px solid rgba(245,158,11,0.22)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '0.8rem', marginTop: 2
-        }}>📍</div>
-        <span style={{
-          fontSize: '0.82rem', color: 'rgba(255,255,255,0.75)',
-          lineHeight: 1.5, flex: 1
-        }}>
-          {payment.customerInfo?.customerAddress || payment.customerAddress}
-        </span>
-      </div>
-    )}
+                        {/* Address */}
+                        {(payment.customerInfo?.customerAddress || payment.customerAddress) && (
+                          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'nowrap' }}>
+                            <div style={{
+                              width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                              background: 'rgba(245,158,11,0.12)',
+                              border: '1px solid rgba(245,158,11,0.22)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: '0.8rem', marginTop: 2
+                            }}>📍</div>
+                            <span style={{
+                              fontSize: '0.82rem', color: 'rgba(255,255,255,0.75)',
+                              lineHeight: 1.5, flex: 1
+                            }}>
+                              {payment.customerInfo?.customerAddress || payment.customerAddress}
+                            </span>
+                          </div>
+                        )}
 
-    {/* Map link */}
-    {(payment.customerInfo?.customerLocation || payment.customerLocation) && (
-      <a
-        href={`https://www.google.com/maps?q=${(payment.customerInfo?.customerLocation || payment.customerLocation).latitude},${(payment.customerInfo?.customerLocation || payment.customerLocation).longitude}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          display: 'inline-flex', flexDirection: 'row', alignItems: 'center',
-          gap: 6, padding: '6px 12px',
-          background: `${theme.color}15`,
-          border: `1px solid ${theme.color}30`,
-          borderRadius: 8, fontSize: '0.78rem', fontWeight: 700,
-          color: theme.color, textDecoration: 'none',
-          alignSelf: 'flex-start', whiteSpace: 'nowrap'
-        }}
-      >
-        🗺️ Open in Google Maps
-      </a>
-    )}
+                        {(payment.customerInfo?.customerLocation || payment.customerLocation) && (
+                          <a
+                            href={`https://www.google.com/maps?q=${(payment.customerInfo?.customerLocation || payment.customerLocation).latitude},${(payment.customerInfo?.customerLocation || payment.customerLocation).longitude}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-flex', flexDirection: 'row', alignItems: 'center',
+                              gap: 6, padding: '6px 12px',
+                              background: `${theme.color}15`,
+                              border: `1px solid ${theme.color}30`,
+                              borderRadius: 8, fontSize: '0.78rem', fontWeight: 700,
+                              color: theme.color, textDecoration: 'none',
+                              alignSelf: 'flex-start', whiteSpace: 'nowrap'
+                            }}
+                          >
+                            🗺️ Open in Google Maps
+                          </a>
+                        )}
 
-  </div>
-</div>
+                      </div>
+                    </div>
 
                     <div style={s.confirmedSection}>
                       <div style={s.confirmedLabel}>Order Items</div>
