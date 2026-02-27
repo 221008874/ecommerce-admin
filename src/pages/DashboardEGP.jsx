@@ -6,6 +6,9 @@ import { useDashboardEGP } from '../hooks/useDashboardEGP'
 import { themes } from '../config/themes'
 import { createStyles } from '../styles/dashboardStyles'
 import { db } from '../services/firebase'
+import { jsPDF } from 'jspdf'
+import html2canvas from 'html2canvas'
+import QRCode from 'qrcode'
 import { 
   collection, 
   addDoc, 
@@ -104,6 +107,7 @@ export default function DashboardEGP() {
   })
   const [editingGovernorate, setEditingGovernorate] = useState(null)
   const [operationsLoading, setOperationsLoading] = useState(false)
+const [isGeneratingPDF, setIsGeneratingPDF] = useState(false)
 
   const [hoveredProduct, setHoveredProduct] = useState(null)
   const [hoveredCard, setHoveredCard] = useState(null)
@@ -191,6 +195,259 @@ export default function DashboardEGP() {
     }
   }
 
+
+// Add this function to generate QR code data URL
+const generateQRDataURL = async (text) => {
+  try {
+    return await QRCode.toDataURL(text, {
+      width: 200,
+      margin: 2,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff'
+      },
+      errorCorrectionLevel: 'H'
+    })
+  } catch (err) {
+    console.error('QR generation error:', err)
+    return null
+  }
+}
+
+// Updated PDF generation function
+// Enhanced PDF generation function with professional design
+const generateCouponsPDF = async () => {
+  const activeUnusedCoupons = coupons.filter(c => 
+    c.isActive && 
+    !isCouponExpired(c) && 
+    (c.usedCount || 0) === 0
+  )
+
+  if (activeUnusedCoupons.length === 0) {
+    alert('No active unused coupons available to export')
+    return
+  }
+
+  setIsGeneratingPDF(true)
+
+  try {
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    })
+
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const margin = 12
+    const cols = 2
+    const rows = 4
+    const couponWidth = (pageWidth - (margin * (cols + 1))) / cols
+    const couponHeight = (pageHeight - (margin * (rows + 1)) - 25) / rows // Account for header
+
+    let currentPage = 0
+    let couponIndex = 0
+
+    // Professional color palette
+    const colors = {
+      primary: [15, 23, 42],      // Dark navy
+      secondary: [212, 160, 23],   // Gold accent
+      success: [16, 185, 129],     // Green
+      light: [248, 250, 252],      // Off-white
+      border: [226, 232, 240],     // Light gray
+      text: [71, 85, 105],         // Slate
+      white: [255, 255, 255]
+    }
+
+    // Generate header for first page
+    const generateHeader = () => {
+      // Header background with gradient effect
+      pdf.setFillColor(...colors.primary)
+      pdf.rect(0, 0, pageWidth, 22, 'F')
+      
+      // Decorative gold line
+      pdf.setFillColor(...colors.secondary)
+      pdf.rect(0, 22, pageWidth, 2, 'F')
+
+      // Brand name
+      pdf.setTextColor(...colors.white)
+      pdf.setFontSize(18)
+      pdf.setFont('helvetica', 'bold')
+      pdf.text('LOUABLE', margin + 5, 14)
+      
+      // Subtitle
+      pdf.setFontSize(9)
+      pdf.setFont('helvetica', 'normal')
+      pdf.text('EXCLUSIVE DISCOUNT COUPONS', margin + 5, 19)
+
+      // Date and count on right
+      pdf.setFontSize(8)
+      pdf.text(`Generated: ${new Date().toLocaleDateString('en-GB')}`, pageWidth - margin, 12, { align: 'right' })
+      pdf.text(`Total Coupons: ${activeUnusedCoupons.length}`, pageWidth - margin, 16, { align: 'right' })
+    }
+
+    generateHeader()
+
+    for (let i = 0; i < activeUnusedCoupons.length; i++) {
+      const coupon = activeUnusedCoupons[i]
+      
+      // Calculate position
+      const col = couponIndex % cols
+      const row = Math.floor(couponIndex / cols) % rows
+      
+      // Check if we need a new page
+      if (couponIndex > 0 && couponIndex % (cols * rows) === 0) {
+        pdf.addPage()
+        currentPage++
+        
+        // Add subtle header to subsequent pages
+        pdf.setFillColor(...colors.primary)
+        pdf.rect(0, 0, pageWidth, 8, 'F')
+        pdf.setTextColor(...colors.white)
+        pdf.setFontSize(7)
+        pdf.text('LOUABLE COUPONS', margin, 5)
+        pdf.text(`Page ${currentPage + 1}`, pageWidth - margin, 5, { align: 'right' })
+      }
+
+      const x = margin + (col * (couponWidth + margin))
+      const y = 30 + (row * (couponHeight + margin)) // Start after header
+
+      // Coupon shadow effect (simulated with darker rectangle)
+      pdf.setFillColor(200, 200, 200)
+      pdf.roundedRect(x + 1, y + 1, couponWidth, couponHeight, 3, 3, 'F')
+
+      // Coupon background
+      pdf.setFillColor(...colors.light)
+      pdf.roundedRect(x, y, couponWidth, couponHeight, 3, 3, 'F')
+
+      // Top accent bar with gold gradient effect
+      pdf.setFillColor(...colors.secondary)
+      pdf.roundedRect(x, y, couponWidth, 10, 3, 3, 'F')
+      // Fix corners by drawing rectangle for bottom part
+      pdf.rect(x, y + 5, couponWidth, 5, 'F')
+
+      // Scissors icon and cut line
+      pdf.setDrawColor(...colors.text)
+      pdf.setLineWidth(0.3)
+      pdf.setLineDashPattern([3, 3], 0)
+      pdf.line(x + 8, y + 28, x + couponWidth - 8, y + 28)
+      pdf.setLineDashPattern([], 0)
+
+      // Scissors icons
+      pdf.setFontSize(8)
+      pdf.setTextColor(...colors.text)
+      pdf.text('✂', x + 4, y + 29)
+      pdf.text('✂', x + couponWidth - 6, y + 29)
+
+      // Header text
+      pdf.setTextColor(...colors.white)
+      pdf.setFontSize(7)
+      pdf.setFont('helvetica', 'bold')
+      pdf.text('EXCLUSIVE DISCOUNT', x + 5, y + 6.5)
+
+      // Value badge (circular background effect)
+      pdf.setFillColor(...colors.white)
+      pdf.roundedRect(x + couponWidth - 28, y + 2, 24, 6, 2, 2, 'F')
+      pdf.setTextColor(...colors.primary)
+      pdf.setFontSize(9)
+      pdf.setFont('helvetica', 'bold')
+      pdf.text(`${theme.symbol}${coupon.amount}`, x + couponWidth - 16, y + 6.5, { align: 'center' })
+
+      // LEFT COLUMN: Information
+      const leftX = x + 6
+      const textStartY = y + 36
+
+      // Coupon Code with prominent styling
+      pdf.setTextColor(...colors.primary)
+      pdf.setFontSize(11)
+      pdf.setFont('courier', 'bold')
+      pdf.text(coupon.code, leftX, textStartY)
+
+      // Underline decoration
+      pdf.setDrawColor(...colors.secondary)
+      pdf.setLineWidth(0.5)
+      pdf.line(leftX, textStartY + 2, leftX + 45, textStartY + 2)
+
+      // Details section
+      pdf.setTextColor(...colors.text)
+      pdf.setFontSize(7)
+      pdf.setFont('helvetica', 'normal')
+
+      const details = [
+        `Valid until: ${coupon.expiresAt?.toLocaleDateString('en-GB') || 'N/A'}`,
+        'One-time use only • Non-transferable',
+        'Scan QR code to apply discount'
+      ]
+
+      details.forEach((detail, idx) => {
+        pdf.text(detail, leftX, textStartY + 10 + (idx * 4.5))
+      })
+
+      // Status badges
+      const badgeY = textStartY + 26
+      pdf.setFillColor(...colors.success)
+      pdf.roundedRect(leftX, badgeY - 3, 20, 5, 2, 2, 'F')
+      pdf.setTextColor(...colors.white)
+      pdf.setFontSize(6)
+      pdf.setFont('helvetica', 'bold')
+      pdf.text('ACTIVE', leftX + 10, badgeY, { align: 'center' })
+
+      // RIGHT COLUMN: QR Code
+      const qrSize = 22
+      const qrX = x + couponWidth - qrSize - 6
+      const qrY = y + 32
+
+      // QR Code background
+      pdf.setFillColor(...colors.white)
+      pdf.roundedRect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4, 2, 2, 'F')
+      pdf.setDrawColor(...colors.border)
+      pdf.setLineWidth(0.3)
+      pdf.roundedRect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4, 2, 2, 'S')
+
+      // Generate QR with landing page URL
+      const qrDataUrl = await generateQRDataURL(`https://elhamdindustriesegp.vercel.app/coupon/${coupon.code}`)
+      if (qrDataUrl) {
+        pdf.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize)
+      }
+
+      // QR Label
+      pdf.setTextColor(...colors.text)
+      pdf.setFontSize(6)
+      pdf.setFont('helvetica', 'normal')
+      pdf.text('Scan to apply', qrX + qrSize/2, qrY + qrSize + 4, { align: 'center' })
+
+      // Bottom border accent
+      pdf.setDrawColor(...colors.secondary)
+      pdf.setLineWidth(1)
+      pdf.line(x + 10, y + couponHeight - 3, x + couponWidth - 10, y + couponHeight - 3)
+
+      couponIndex++
+    }
+
+    // Footer on last page
+    const footerY = pageHeight - 8
+    pdf.setFillColor(...colors.primary)
+    pdf.rect(0, footerY - 4, pageWidth, 12, 'F')
+    
+    pdf.setTextColor(...colors.white)
+    pdf.setFontSize(7)
+    pdf.setFont('helvetica', 'normal')
+    pdf.text(
+      'Thank you for shopping with us! • Scan QR code at checkout to apply discount • Valid for single use only',
+      pageWidth / 2,
+      footerY + 1,
+      { align: 'center' }
+    )
+
+    pdf.save(`louable-coupons-${new Date().toISOString().split('T')[0]}.pdf`)
+    
+  } catch (error) {
+    console.error('Error generating PDF:', error)
+    alert('Failed to generate PDF. Please try again.')
+  } finally {
+    setIsGeneratingPDF(false)
+  }
+}
   // FIXED: Update governorate shipping cost only
   const handleUpdateGovernorateCost = async (governorateId, newCost) => {
     try {
@@ -510,36 +767,55 @@ export default function DashboardEGP() {
         )}
 
         {/* Coupons Actions Bar */}
-        {activeTab === 'coupons' && (
-          <div style={s.actionsBar}>
-            <button 
-              onClick={() => {
-                setShowCouponForm(!showCouponForm)
-                setEditingCoupon(null)
-                setCouponFormData({ amount: '', duration: '', quantity: 1 })
-              }} 
-              style={{...s.addBtn, background: showCouponForm ? '#e11d48' : theme.gradient}}
-              onMouseEnter={() => setHoveredButton('coupon-add')} 
-              onMouseLeave={() => setHoveredButton(null)}
-            >
-              <span>{showCouponForm ? '✕' : '🎫'}</span>
-              {showCouponForm ? 'Cancel' : 'Generate Coupons'}
-            </button>
-            <div style={s.searchBox}>
-              <span style={{position: 'absolute', left: isMobile ? 10 : 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.2rem'}}>🔍</span>
-              <input 
-                type="text" 
-                placeholder="Search coupons by code or amount..." 
-                style={s.searchInput} 
-                value={couponSearchQuery} 
-                onChange={(e) => setCouponSearchQuery(e.target.value)}
-                onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}1a` }}
-                onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)' }} 
-              />
-            </div>
-          </div>
-        )}
-
+{activeTab === 'coupons' && (
+  <div style={s.actionsBar}>
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+      <button 
+        onClick={() => {
+          setShowCouponForm(!showCouponForm)
+          setEditingCoupon(null)
+          setCouponFormData({ amount: '', duration: '', quantity: 1 })
+        }} 
+        style={{...s.addBtn, background: showCouponForm ? '#e11d48' : theme.gradient}}
+        onMouseEnter={() => setHoveredButton('coupon-add')} 
+        onMouseLeave={() => setHoveredButton(null)}
+      >
+        <span>{showCouponForm ? '✕' : '🎫'}</span>
+        {showCouponForm ? 'Cancel' : 'Generate Coupons'}
+      </button>
+      
+      {/* NEW: Export PDF Button */}
+      <button 
+        onClick={generateCouponsPDF}
+        disabled={isGeneratingPDF}
+        style={{
+          ...s.addBtn,
+          background: isGeneratingPDF ? '#94a3b8' : 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+          opacity: isGeneratingPDF ? 0.7 : 1,
+          cursor: isGeneratingPDF ? 'not-allowed' : 'pointer'
+        }}
+        onMouseEnter={() => setHoveredButton('pdf-export')} 
+        onMouseLeave={() => setHoveredButton(null)}
+      >
+        <span>{isGeneratingPDF ? '⟳' : '📄'}</span>
+        {isGeneratingPDF ? 'Generating...' : 'Export PDF'}
+      </button>
+    </div>
+    
+    <div style={s.searchBox}>
+      <span style={{position: 'absolute', left: isMobile ? 10 : 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.2rem'}}>🔍</span>
+      <input 
+        type="text" 
+        placeholder="Search coupons by code or amount..." 
+        style={s.searchInput} 
+        value={couponSearchQuery} 
+        onChange={(e) => setCouponSearchQuery(e.target.value)}
+        onFocus={(e) => { e.target.style.borderColor = theme.color; e.target.style.boxShadow = `0 0 0 3px ${theme.color}1a` }}
+        onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)' }} 
+      />
+    </div>
+  </div>
+)}
         {/* Date Filter for Confirmed Orders */}
         {activeTab === 'confirmed' && (
           <div style={s.dateFilterContainer}>
@@ -1221,9 +1497,17 @@ export default function DashboardEGP() {
         {activeTab === 'coupons' && (
           <>
             <div style={s.sectionHeader}>
-              <h2 style={s.sectionTitle}>🎫 Coupons<span style={s.sectionCount}>{filteredCoupons.length}</span></h2>
-              <p style={s.sectionSubtitle}>Manage discount coupons for EGP store</p>
-            </div>
+      <h2 style={s.sectionTitle}>
+        🎫 Coupons
+        <span style={s.sectionCount}>{filteredCoupons.length}</span>
+      </h2>
+      <p style={s.sectionSubtitle}>
+        Manage discount coupons for EGP store • 
+        <span style={{ color: theme.color, fontWeight: 600 }}>
+          {' '}{coupons.filter(c => c.isActive && !isCouponExpired(c) && (c.usedCount || 0) === 0).length} ready to print
+        </span>
+      </p>
+    </div>
 
             {filteredCoupons.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
