@@ -217,9 +217,9 @@ const generateQRDataURL = async (text) => {
 // Updated PDF generation function
 // Enhanced PDF generation function with professional design
 const generateCouponsPDF = async () => {
-  const activeUnusedCoupons = coupons.filter(c => 
-    c.isActive && 
-    !isCouponExpired(c) && 
+  const activeUnusedCoupons = coupons.filter(c =>
+    c.isActive &&
+    !isCouponExpired(c) &&
     (c.usedCount || 0) === 0
   )
 
@@ -231,216 +231,322 @@ const generateCouponsPDF = async () => {
   setIsGeneratingPDF(true)
 
   try {
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    })
+    // ═══════════════════════════════════════════════════════════
+    // A4 PAGE GEOMETRY
+    // A4 = 210 × 297 mm
+    // ═══════════════════════════════════════════════════════════
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const PW = 210
+    const PH = 297
 
-    const pageWidth = pdf.internal.pageSize.getWidth()
-    const pageHeight = pdf.internal.pageSize.getHeight()
-    const margin = 12
-    const cols = 2
-    const rows = 4
-    const couponWidth = (pageWidth - (margin * (cols + 1))) / cols
-    const couponHeight = (pageHeight - (margin * (rows + 1)) - 25) / rows // Account for header
+    // Page chrome
+    const HDR  = 24   // header height
+    const FTR  = 13   // footer height
+    const PAD  = 11   // outer margin on all sides
+    const GAPX = 7    // gap between 2 coupon columns
+    const GAPY = 6    // gap between coupon rows
+    const COLS = 2
+    const ROWS = 4
 
-    let currentPage = 0
-    let couponIndex = 0
+    // Coupon card size — calculated to fill the grid exactly
+    // CW = (210 - 11*2 - 7)  / 2 = 85.5 mm
+    // CH = (297 - 24 - 13 - 11*2 - 6*3) / 4 = (238 - 18) / 4 = 55 mm
+    const CW = (PW - PAD * 2 - GAPX) / COLS          // 85.5 mm
+    const CH = (PH - HDR - FTR - PAD * 2 - GAPY * (ROWS - 1)) / ROWS  // 55 mm
 
-    // Professional color palette
-    const colors = {
-      primary: [15, 23, 42],      // Dark navy
-      secondary: [212, 160, 23],   // Gold accent
-      success: [16, 185, 129],     // Green
-      light: [248, 250, 252],      // Off-white
-      border: [226, 232, 240],     // Light gray
-      text: [71, 85, 105],         // Slate
-      white: [255, 255, 255]
+    // ── Inside each card the layout is: ────────────────────────
+    //
+    //   ┌────────────────────────────────────────────────────────┐
+    //   │  [  NAVY HEADER BAND — full width  ]  [ AMOUNT BADGE ]│  0–14
+    //   ├──────────────────────── gold strip ────────────────────┤  14–15.5
+    //   │                                    │                   │
+    //   │  LEFT TEXT COLUMN (0–57mm wide)    │  RIGHT QR COLUMN  │  15.5–CH
+    //   │  • COUPON CODE label               │  (57–CW, 28.5mm)  │
+    //   │  • code value                      │  QR 28×28         │
+    //   │  • gold underline                  │  "Scan to redeem" │
+    //   │  • expiry pill                     │                   │
+    //   │  • single-use pill                 │                   │
+    //   │  • ACTIVE badge                    │                   │
+    //   ├───────────────── gold bottom bar ──────────────────────┤  CH-1.5–CH
+    //   └────────────────────────────────────────────────────────┘
+    //
+    //   Divider line between left/right at x = cx + 57
+
+    const BAND_H  = 14    // navy top band height
+    const DIVX    = 57    // x of left/right divider (from card left edge)
+    const QR_SZ   = 28    // QR image side length
+    const L_PAD   = 5     // left-column inner padding
+    const R_PAD   = 4     // right-column inner padding from divider
+
+    // ═══════════════════════════════════════════════════════════
+    // COLOURS
+    // ═══════════════════════════════════════════════════════════
+    const C = {
+      navy:     [10,  18,  45],
+      navyMid:  [18,  32,  72],
+      gold:     [190, 138, 15],
+      goldLt:   [225, 178, 55],
+      goldPale: [255, 248, 220],
+      green:    [4,   142, 97],
+      greenPale:[210, 252, 231],
+      slate:    [68,  82,  102],
+      silver:   [145, 160, 182],
+      bg:       [247, 249, 252],
+      white:    [255, 255, 255],
+      border:   [208, 218, 234],
+      shadow:   [182, 193, 212],
+      perf:     [190, 202, 218],
     }
 
-    // Generate header for first page
-    const generateHeader = () => {
-      // Header background with gradient effect
-      pdf.setFillColor(...colors.primary)
-      pdf.rect(0, 0, pageWidth, 22, 'F')
-      
-      // Decorative gold line
-      pdf.setFillColor(...colors.secondary)
-      pdf.rect(0, 22, pageWidth, 2, 'F')
-
-      // Brand name
-      pdf.setTextColor(...colors.white)
-      pdf.setFontSize(18)
-      pdf.setFont('helvetica', 'bold')
-      pdf.text('LOUABLE', margin + 5, 14)
-      
-      // Subtitle
-      pdf.setFontSize(9)
+    // ═══════════════════════════════════════════════════════════
+    // DRAW HELPERS
+    // ═══════════════════════════════════════════════════════════
+    const fillR = (x, y, w, h, r, col) => {
+      pdf.setFillColor(...col)
+      pdf.roundedRect(x, y, w, h, r, r, 'F')
+    }
+    const strokeR = (x, y, w, h, r, col, lw = 0.25) => {
+      pdf.setDrawColor(...col)
+      pdf.setLineWidth(lw)
+      pdf.roundedRect(x, y, w, h, r, r, 'S')
+    }
+    const dashed = (x1, y, x2, dash = 1.6, gap = 2.2) => {
+      pdf.setLineWidth(0.25)
+      for (let cx = x1; cx < x2; cx += dash + gap) {
+        pdf.line(cx, y, Math.min(cx + dash, x2), y)
+      }
+    }
+    const pill = (x, y, w, h, bgCol, textCol, label, fontSize = 5.5) => {
+      fillR(x, y, w, h, 2, bgCol)
       pdf.setFont('helvetica', 'normal')
-      pdf.text('EXCLUSIVE DISCOUNT COUPONS', margin + 5, 19)
-
-      // Date and count on right
-      pdf.setFontSize(8)
-      pdf.text(`Generated: ${new Date().toLocaleDateString('en-GB')}`, pageWidth - margin, 12, { align: 'right' })
-      pdf.text(`Total Coupons: ${activeUnusedCoupons.length}`, pageWidth - margin, 16, { align: 'right' })
+      pdf.setFontSize(fontSize)
+      pdf.setTextColor(...textCol)
+      pdf.text(label, x + w / 2, y + h / 2 + fontSize * 0.18, { align: 'center' })
     }
 
-    generateHeader()
+    // ═══════════════════════════════════════════════════════════
+    // PAGE HEADER
+    // ═══════════════════════════════════════════════════════════
+    const drawHeader = (pageNum, totalPages) => {
+      // Navy bg
+      pdf.setFillColor(...C.navy)
+      pdf.rect(0, 0, PW, HDR, 'F')
+      // Top highlight strip
+      pdf.setFillColor(...C.navyMid)
+      pdf.rect(0, 0, PW, 1.5, 'F')
+      // Gold bottom bar
+      pdf.setFillColor(...C.gold)
+      pdf.rect(0, HDR - 2, PW, 2, 'F')
+
+      // Left: brand + tagline
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(17)
+      pdf.setTextColor(...C.white)
+      pdf.text('LOUABLE', PAD, 14)
+
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(6.5)
+      pdf.setTextColor(...C.goldLt)
+      pdf.text('EXCLUSIVE DISCOUNT COUPONS', PAD, 20.5)
+
+      // Right: meta
+      pdf.setFontSize(6.5)
+      pdf.setTextColor(...C.silver)
+      pdf.text(
+        `Generated: ${new Date().toLocaleDateString('en-GB')}`,
+        PW - PAD, 13, { align: 'right' }
+      )
+      pdf.text(
+        `${activeUnusedCoupons.length} coupons  ·  Page ${pageNum + 1} / ${totalPages}`,
+        PW - PAD, 20.5, { align: 'right' }
+      )
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PAGE FOOTER
+    // ═══════════════════════════════════════════════════════════
+    const drawFooter = () => {
+      const fy = PH - FTR
+      pdf.setFillColor(...C.navy)
+      pdf.rect(0, fy, PW, FTR, 'F')
+      pdf.setFillColor(...C.gold)
+      pdf.rect(0, fy, PW, 1.5, 'F')
+
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(6)
+      pdf.setTextColor(...C.silver)
+      pdf.text(
+        'Valid for single use only  ·  Non-transferable  ·  Scan QR code at checkout to apply discount',
+        PW / 2, fy + 5.5, { align: 'center' }
+      )
+      pdf.setTextColor(...C.goldLt)
+      pdf.text('elhamdindustriesegp.vercel.app', PW / 2, fy + 10.5, { align: 'center' })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // COUPON CARD
+    // ═══════════════════════════════════════════════════════════
+    const drawCoupon = async (coupon, cx, cy) => {
+      const R = 3.5   // card corner radius
+
+      // ── 1. Shadow
+      fillR(cx + 1.5, cy + 1.5, CW, CH, R, C.shadow)
+
+      // ── 2. Card base
+      fillR(cx, cy, CW, CH, R, C.bg)
+
+      // ── 3. Navy top band (full width, BAND_H=14mm)
+      pdf.setFillColor(...C.navy)
+      pdf.roundedRect(cx, cy, CW, BAND_H, R, R, 'F')
+      // Square off the bottom edge of the rounded rect
+      pdf.rect(cx, cy + BAND_H - R, CW, R, 'F')
+
+      // ── 4. Gold strip right below band
+      pdf.setFillColor(...C.gold)
+      pdf.rect(cx, cy + BAND_H, CW, 1.5, 'F')
+
+      // ── 5. Amount badge — right-aligned inside band
+      //       Pill: 30×9mm, vertically centred in 14mm band → y = cy + 2.5
+      const BW = 30, BH = 9
+      const bx = cx + CW - BW - 5
+      const by = cy + (BAND_H - BH) / 2
+      fillR(bx, by, BW, BH, 3, C.gold)
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(10)
+      pdf.setTextColor(...C.navy)
+      pdf.text(
+        `${theme.symbol}${coupon.amount}`,
+        bx + BW / 2, by + BH / 2 + 1.8,
+        { align: 'center' }
+      )
+
+      // ── 6. Band text — left side (stays clear of badge)
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(7)
+      pdf.setTextColor(...C.white)
+      pdf.text('EXCLUSIVE DISCOUNT', cx + L_PAD, cy + 6.5)
+
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(5.5)
+      pdf.setTextColor(...C.goldLt)
+      pdf.text('MEMBER COUPON', cx + L_PAD, cy + 12)
+
+      // ── 7. Vertical divider line (left/right column separator)
+      //       Runs from below gold strip to above gold bottom bar
+      const divX = cx + DIVX
+      pdf.setDrawColor(...C.border)
+      pdf.setLineWidth(0.3)
+      pdf.line(divX, cy + BAND_H + 1.5, divX, cy + CH - 3)
+
+      // ── 8. LEFT COLUMN content
+      //       All y coords are absolute (cy + offset)
+      const LX = cx + L_PAD   // left content x
+
+      // "COUPON CODE" micro-label at cy+19
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(5)
+      pdf.setTextColor(...C.slate)
+      pdf.text('COUPON CODE', LX, cy + 19)
+
+      // Code value at cy+26
+      pdf.setFont('courier', 'bold')
+      pdf.setFontSize(10.5)
+      pdf.setTextColor(...C.navy)
+      pdf.text(coupon.code, LX, cy + 26)
+
+      // Gold underline — constrained to left column width
+      const maxCodeW = DIVX - L_PAD - 3
+      pdf.setFont('courier', 'bold'); pdf.setFontSize(10.5)
+      const codeW = Math.min(pdf.getTextWidth(coupon.code), maxCodeW)
+      pdf.setDrawColor(...C.gold)
+      pdf.setLineWidth(0.7)
+      pdf.line(LX, cy + 27.5, LX + codeW, cy + 27.5)
+
+      // Expiry pill: x=LX, y=cy+30, width = DIVX-L_PAD-3, height=6
+      const expire = coupon.expiresAt?.toLocaleDateString('en-GB') || 'No expiry'
+      const PW_LEFT = DIVX - L_PAD - 3   // pill width fits strictly in left column
+      fillR(LX, cy + 30, PW_LEFT, 6, 2, C.goldPale)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(5.5)
+      pdf.setTextColor(...C.gold)
+      pdf.text(`Valid until: ${expire}`, LX + 2.5, cy + 34)
+
+      // Single-use pill: y=cy+37.5
+      fillR(LX, cy + 37.5, PW_LEFT, 6, 2, C.greenPale)
+      pdf.setFontSize(5.5)
+      pdf.setTextColor(...C.green)
+      pdf.text('✓  Single use  ·  Non-transferable', LX + 2.5, cy + 41.5)
+
+      // ACTIVE badge: y=cy+45
+      fillR(LX, cy + 45, 20, 6, 2, C.green)
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(5.5)
+      pdf.setTextColor(...C.white)
+      pdf.text('ACTIVE', LX + 10, cy + 49, { align: 'center' })
+
+      // ── 9. RIGHT COLUMN — QR code
+      //       Available width  = CW - DIVX - R_PAD*2 = 85.5-57-8 = 20.5mm  ← too narrow for 28mm QR
+      //       ▶ Widen right column: shift divider to 52mm, QR=28mm
+      //         divX = cx+52, QR starts at divX+R_PAD = cx+56, QR_SZ=28, right edge=cx+84 < cx+CW ✓
+
+      // QR is centred in the right column
+      const rightColW = CW - DIVX - 1   // remaining width after divider
+      const QX = divX + (rightColW - QR_SZ) / 2   // centre QR horizontally
+      const QY = cy + BAND_H + 2.5                 // just below gold strip
+
+      // Navy outer frame, white mat
+      fillR(QX - 2, QY - 2, QR_SZ + 4, QR_SZ + 4, 2.5, C.navy)
+      fillR(QX - 1, QY - 1, QR_SZ + 2, QR_SZ + 2, 2,   C.white)
+
+      const qrUrl = await generateQRDataURL(
+        `https://elhamdindustriesegp.vercel.app/coupon/${coupon.code}`
+      )
+      if (qrUrl) pdf.addImage(qrUrl, 'PNG', QX, QY, QR_SZ, QR_SZ)
+
+      // "Scan to redeem" below QR — centred in right column
+      const scanY = QY + QR_SZ + 5
+      if (scanY < cy + CH - 3) {
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(5)
+        pdf.setTextColor(...C.slate)
+        pdf.text('Scan to redeem', QX + QR_SZ / 2, scanY, { align: 'center' })
+      }
+
+      // ── 10. Gold bottom bar
+      pdf.setFillColor(...C.gold)
+      pdf.rect(cx + 6, cy + CH - 1.5, CW - 12, 1.5, 'F')
+
+      // ── 11. Card border
+      strokeR(cx, cy, CW, CH, R, C.border, 0.2)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // RENDER ALL PAGES
+    // ═══════════════════════════════════════════════════════════
+    const PER_PAGE    = COLS * ROWS
+    const TOTAL_PAGES = Math.ceil(activeUnusedCoupons.length / PER_PAGE)
+    const GRID_TOP    = HDR + PAD
 
     for (let i = 0; i < activeUnusedCoupons.length; i++) {
-      const coupon = activeUnusedCoupons[i]
-      
-      // Calculate position
-      const col = couponIndex % cols
-      const row = Math.floor(couponIndex / cols) % rows
-      
-      // Check if we need a new page
-      if (couponIndex > 0 && couponIndex % (cols * rows) === 0) {
-        pdf.addPage()
-        currentPage++
-        
-        // Add subtle header to subsequent pages
-        pdf.setFillColor(...colors.primary)
-        pdf.rect(0, 0, pageWidth, 8, 'F')
-        pdf.setTextColor(...colors.white)
-        pdf.setFontSize(7)
-        pdf.text('LOUABLE COUPONS', margin, 5)
-        pdf.text(`Page ${currentPage + 1}`, pageWidth - margin, 5, { align: 'right' })
+      const pageNum     = Math.floor(i / PER_PAGE)
+      const indexOnPage = i % PER_PAGE
+
+      if (indexOnPage === 0) {
+        if (i > 0) pdf.addPage()
+        drawHeader(pageNum, TOTAL_PAGES)
+        drawFooter()
       }
 
-      const x = margin + (col * (couponWidth + margin))
-      const y = 30 + (row * (couponHeight + margin)) // Start after header
+      const col = indexOnPage % COLS
+      const row = Math.floor(indexOnPage / COLS)
+      const cx  = PAD + col * (CW + GAPX)
+      const cy  = GRID_TOP + row * (CH + GAPY)
 
-      // Coupon shadow effect (simulated with darker rectangle)
-      pdf.setFillColor(200, 200, 200)
-      pdf.roundedRect(x + 1, y + 1, couponWidth, couponHeight, 3, 3, 'F')
-
-      // Coupon background
-      pdf.setFillColor(...colors.light)
-      pdf.roundedRect(x, y, couponWidth, couponHeight, 3, 3, 'F')
-
-      // Top accent bar with gold gradient effect
-      pdf.setFillColor(...colors.secondary)
-      pdf.roundedRect(x, y, couponWidth, 10, 3, 3, 'F')
-      // Fix corners by drawing rectangle for bottom part
-      pdf.rect(x, y + 5, couponWidth, 5, 'F')
-
-      // Scissors icon and cut line
-      pdf.setDrawColor(...colors.text)
-      pdf.setLineWidth(0.3)
-      pdf.setLineDashPattern([3, 3], 0)
-      pdf.line(x + 8, y + 28, x + couponWidth - 8, y + 28)
-      pdf.setLineDashPattern([], 0)
-
-      // Scissors icons
-      pdf.setFontSize(8)
-      pdf.setTextColor(...colors.text)
-      pdf.text('✂', x + 4, y + 29)
-      pdf.text('✂', x + couponWidth - 6, y + 29)
-
-      // Header text
-      pdf.setTextColor(...colors.white)
-      pdf.setFontSize(7)
-      pdf.setFont('helvetica', 'bold')
-      pdf.text('EXCLUSIVE DISCOUNT', x + 5, y + 6.5)
-
-      // Value badge (circular background effect)
-      pdf.setFillColor(...colors.white)
-      pdf.roundedRect(x + couponWidth - 28, y + 2, 24, 6, 2, 2, 'F')
-      pdf.setTextColor(...colors.primary)
-      pdf.setFontSize(9)
-      pdf.setFont('helvetica', 'bold')
-      pdf.text(`${theme.symbol}${coupon.amount}`, x + couponWidth - 16, y + 6.5, { align: 'center' })
-
-      // LEFT COLUMN: Information
-      const leftX = x + 6
-      const textStartY = y + 36
-
-      // Coupon Code with prominent styling
-      pdf.setTextColor(...colors.primary)
-      pdf.setFontSize(11)
-      pdf.setFont('courier', 'bold')
-      pdf.text(coupon.code, leftX, textStartY)
-
-      // Underline decoration
-      pdf.setDrawColor(...colors.secondary)
-      pdf.setLineWidth(0.5)
-      pdf.line(leftX, textStartY + 2, leftX + 45, textStartY + 2)
-
-      // Details section
-      pdf.setTextColor(...colors.text)
-      pdf.setFontSize(7)
-      pdf.setFont('helvetica', 'normal')
-
-      const details = [
-        `Valid until: ${coupon.expiresAt?.toLocaleDateString('en-GB') || 'N/A'}`,
-        'One-time use only • Non-transferable',
-        'Scan QR code to apply discount'
-      ]
-
-      details.forEach((detail, idx) => {
-        pdf.text(detail, leftX, textStartY + 10 + (idx * 4.5))
-      })
-
-      // Status badges
-      const badgeY = textStartY + 26
-      pdf.setFillColor(...colors.success)
-      pdf.roundedRect(leftX, badgeY - 3, 20, 5, 2, 2, 'F')
-      pdf.setTextColor(...colors.white)
-      pdf.setFontSize(6)
-      pdf.setFont('helvetica', 'bold')
-      pdf.text('ACTIVE', leftX + 10, badgeY, { align: 'center' })
-
-      // RIGHT COLUMN: QR Code
-      const qrSize = 22
-      const qrX = x + couponWidth - qrSize - 6
-      const qrY = y + 32
-
-      // QR Code background
-      pdf.setFillColor(...colors.white)
-      pdf.roundedRect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4, 2, 2, 'F')
-      pdf.setDrawColor(...colors.border)
-      pdf.setLineWidth(0.3)
-      pdf.roundedRect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4, 2, 2, 'S')
-
-      // Generate QR with landing page URL
-      const qrDataUrl = await generateQRDataURL(`https://elhamdindustriesegp.vercel.app/coupon/${coupon.code}`)
-      if (qrDataUrl) {
-        pdf.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize)
-      }
-
-      // QR Label
-      pdf.setTextColor(...colors.text)
-      pdf.setFontSize(6)
-      pdf.setFont('helvetica', 'normal')
-      pdf.text('Scan to apply', qrX + qrSize/2, qrY + qrSize + 4, { align: 'center' })
-
-      // Bottom border accent
-      pdf.setDrawColor(...colors.secondary)
-      pdf.setLineWidth(1)
-      pdf.line(x + 10, y + couponHeight - 3, x + couponWidth - 10, y + couponHeight - 3)
-
-      couponIndex++
+      await drawCoupon(activeUnusedCoupons[i], cx, cy)
     }
 
-    // Footer on last page
-    const footerY = pageHeight - 8
-    pdf.setFillColor(...colors.primary)
-    pdf.rect(0, footerY - 4, pageWidth, 12, 'F')
-    
-    pdf.setTextColor(...colors.white)
-    pdf.setFontSize(7)
-    pdf.setFont('helvetica', 'normal')
-    pdf.text(
-      'Thank you for shopping with us! • Scan QR code at checkout to apply discount • Valid for single use only',
-      pageWidth / 2,
-      footerY + 1,
-      { align: 'center' }
-    )
-
     pdf.save(`louable-coupons-${new Date().toISOString().split('T')[0]}.pdf`)
-    
+
   } catch (error) {
     console.error('Error generating PDF:', error)
     alert('Failed to generate PDF. Please try again.')
